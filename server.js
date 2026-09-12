@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
+const { runAgent } = require('./agent');
 
 // ─── Configuration ───────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
@@ -238,59 +239,22 @@ function handleCommand(ws, payload, connectionId) {
 
   console.log(`[CMD] ${connectionId}: ${command}`);
 
-  // ────────────────────────────────────────────────────────────────
-  // HERMES INTEGRATION POINT
-  // Replace the simulation below with actual Hermes agent execution.
-  //
-  // Example real integration:
-  //   const result = await hermesAgent.execute(command, {
-  //     onStatus: (msg)  => sendFrame(ws, 'status', { message: msg }),
-  //     onCode:   (file, content) => sendFrame(ws, 'code', { filename: file, data: content }),
-  //     onText:   (msg)  => sendFrame(ws, 'text', { message: msg }),
-  //     onError:  (msg)  => sendFrame(ws, 'error', { message: msg }),
-  //   });
-  //
-  // For now, we simulate a realistic streaming response.
-  // ────────────────────────────────────────────────────────────────
+  const workdir = process.env.WORKDIR || path.join(__dirname, 'workspace');
 
-  simulateAgentResponse(ws, command);
+  runAgent(command, {
+    onStatus:  (msg)  => sendFrame(ws, 'status', { message: msg }),
+    onCode:    (file, content) => sendFrame(ws, 'code', { filename: file, data: content }),
+    onText:    (msg)  => sendFrame(ws, 'text', { message: msg }),
+    onError:   (msg)  => sendFrame(ws, 'error', { message: msg }),
+  }, workdir).catch(err => {
+    sendFrame(ws, 'error', { message: `Agent crashed: ${err.message}` });
+  });
 }
 
 function sendFrame(ws, type, data) {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type, ...data }));
   }
-}
-
-// ─── Simulation (Replace with real Hermes integration) ──────────────
-function simulateAgentResponse(ws, command) {
-  const steps = [
-    { delay: 300,   frame: { type: 'status', message: 'Analyzing instruction...' } },
-    { delay: 800,   frame: { type: 'status', message: 'Cloning repository...' } },
-    { delay: 1500,  frame: { type: 'status', message: 'Scanning codebase structure...' } },
-    { delay: 2200,  frame: { type: 'status', message: 'Executing tool: file_edit' } },
-    {
-      delay: 3000,
-      frame: {
-        type: 'code',
-        filename: 'src/components/Navbar.js',
-        data: `import React from 'react';\n\nexport const Navbar = () => {\n  return (\n    <nav className="bg-zinc-900 text-white p-4 shadow-lg">\n      <div className="max-w-7xl mx-auto flex items-center justify-between">\n        <h1 className="text-xl font-bold tracking-tight">Hermes Project</h1>\n        <div className="flex gap-4 text-sm">\n          <a href="/dashboard" className="hover:text-amber-400 transition">Dashboard</a>\n          <a href="/settings" className="hover:text-amber-400 transition">Settings</a>\n        </div>\n      </div>\n    </nav>\n  );\n};`,
-      },
-    },
-    { delay: 3800, frame: { type: 'status', message: 'Running tests...' } },
-    { delay: 4500, frame: { type: 'status', message: 'Tests passed.' } },
-    {
-      delay: 5000,
-      frame: {
-        type: 'text',
-        message: `Task complete. I created a responsive Navbar component at \`src/components/Navbar.js\` with:\n- Dark zinc background with shadow\n- Responsive flex layout\n- Navigation links with hover transitions\n\nAll tests passing. Ready for next instruction.`,
-      },
-    },
-  ];
-
-  steps.forEach(({ delay, frame }) => {
-    setTimeout(() => sendFrame(ws, frame.type, frame), delay);
-  });
 }
 
 // ─── Graceful Shutdown ──────────────────────────────────────────────
