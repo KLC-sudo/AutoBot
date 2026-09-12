@@ -133,14 +133,6 @@ const wss = new WebSocket.Server({
 // Client must send { type: "auth", token: "..." } within 5 seconds of connection.
 // If no valid auth message arrives, the socket is destroyed.
 server.on('upgrade', (request, socket, head) => {
-  // Reject if origin doesn't match (extra layer)
-  const origin = request.headers.origin;
-  if (origin && origin !== ALLOWED_ORIGIN) {
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
   wss.handleUpgrade(request, socket, head, (ws) => {
     ws._authenticated = false;
     ws._authTimeout = setTimeout(() => {
