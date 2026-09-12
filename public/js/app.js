@@ -260,7 +260,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Sidebar
-  document.getElementById('toggle-sidebar-btn').addEventListener('click', closeSidebar);
   document.getElementById('show-sidebar-btn').addEventListener('click', openSidebar);
   document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
