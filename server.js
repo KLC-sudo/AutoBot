@@ -23,6 +23,10 @@ if (!UI_PASSWORD || UI_PASSWORD === 'change_this_immediately') {
 
 // ─── Express App ─────────────────────────────────────────────────────
 const app = express();
+
+// Trust Railway's reverse proxy so rate-limit sees real client IPs
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 
 // Security headers via Helmet
