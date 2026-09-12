@@ -4,7 +4,6 @@
 
 const Terminal = (() => {
   const MAX_MESSAGES = 500;
-  let messageCount = 0;
 
   function _getStream() {
     return document.getElementById('terminal-stream');
@@ -17,7 +16,6 @@ const Terminal = (() => {
   }
 
   function _renderMarkdown(text) {
-    // Simple inline markdown: **bold**, *italic*, `code`, ```code blocks```
     let escaped = _escapeHtml(text);
 
     // Code blocks (triple backtick)
@@ -47,14 +45,13 @@ const Terminal = (() => {
     el.innerHTML = html;
     stream.appendChild(el);
 
-    messageCount++;
     _trimMessages();
     _scrollToBottom();
   }
 
   function _trimMessages() {
     const stream = _getStream();
-    while (stream.children.length > MAX_MESSAGES) {
+    while (stream.children.length > 500) {
       stream.removeChild(stream.firstChild);
     }
   }
@@ -71,12 +68,14 @@ const Terminal = (() => {
     _append(`<span class="text-muted">[${time}]</span> ${_escapeHtml(message)}`, 'msg-system');
   }
 
-  function addAgent(message) {
-    _append(`<span style="color:var(--accent);font-weight:600">Agent:</span> ${_renderMarkdown(message)}`, 'msg-agent');
+  function addAgent(message, isReplay) {
+    const prefix = isReplay ? '<span style="color:var(--text-muted);font-weight:600">[history]</span> ' : '';
+    _append(`${prefix}<span style="color:var(--accent);font-weight:600">Agent:</span> ${_renderMarkdown(message)}`, 'msg-agent');
   }
 
-  function addUser(message) {
-    _append(`<span style="color:var(--info);font-weight:600">You:</span> ${_escapeHtml(message)}`, 'msg-user');
+  function addUser(message, isReplay) {
+    const prefix = isReplay ? '<span style="color:var(--text-muted);font-weight:600">[history]</span> ' : '';
+    _append(`${prefix}<span style="color:var(--info);font-weight:600">You:</span> ${_escapeHtml(message)}`, 'msg-user');
   }
 
   function addError(message) {
@@ -93,15 +92,12 @@ const Terminal = (() => {
   }
 
   function clear() {
-    const stream = _getStream();
-    stream.innerHTML = '';
-    messageCount = 0;
+    _getStream().innerHTML = '';
   }
 
   return { addStatus, addAgent, addUser, addError, addCodeUpdate, addSystem, clear };
 })();
 
-/* ─── Clear Terminal ────────────────────────────────────────────── */
 function clearTerminal() {
   Terminal.clear();
 }

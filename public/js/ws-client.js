@@ -12,6 +12,18 @@ const WsClient = (() => {
   const MAX_RECONNECT_DELAY = 30000;
   const BASE_RECONNECT_DELAY = 1000;
 
+  // Message handlers registry
+  const _handlers = {};
+
+  function on(type, handler) {
+    if (!_handlers[type]) _handlers[type] = [];
+    _handlers[type].push(handler);
+  }
+
+  function _emit(type, data) {
+    (_handlers[type] || []).forEach(h => h(data));
+  }
+
   function connect(token) {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
       ws.close();
@@ -55,8 +67,9 @@ const WsClient = (() => {
     };
 
     ws.onclose = (event) => {
-      console.log(`[WS] Closed: code=${event.code} reason=${event.reason}`);
+      console.log(`[WS] Closed: code=${event.code}`);
       updateConnectionStatus('offline');
+      _emit('disconnected', { code: event.code });
 
       if (!_intentionalClose) {
         _scheduleReconnect();
@@ -74,6 +87,10 @@ const WsClient = (() => {
     }
   }
 
+  function send(type, data) {
+    _send({ type, ...data });
+  }
+
   function sendCommand(text) {
     _send({ type: 'command', data: text });
   }
@@ -85,6 +102,10 @@ const WsClient = (() => {
   }
 
   function _handlePacket(packet) {
+    // Emit to registered handlers
+    _emit(packet.type, packet);
+
+    // Built-in handling
     switch (packet.type) {
       case 'auth_success':
         console.log('[WS] Authenticated:', packet.connectionId);
@@ -118,8 +139,26 @@ const WsClient = (() => {
         CodeViewer.showFile(packet.filename, packet.data);
         break;
 
-      default:
-        console.warn('[WS] Unknown packet type:', packet.type);
+      case 'tokens':
+        _emit('tokenUpdate', packet);
+        break;
+
+      case 'session':
+        _emit('sessionUpdate', packet);
+        break;
+
+      case 'session_list':
+        _emit('sessionList', packet);
+        break;
+
+      case 'models':
+        _emit('modelsList', packet);
+        break;
+
+      case 'history':
+        if (packet.role === 'user') Terminal.addUser(packet.content, true);
+        else if (packet.role === 'assistant') Terminal.addAgent(packet.content, true);
+        break;
     }
   }
 
@@ -159,5 +198,5 @@ const WsClient = (() => {
     return ws && ws.readyState === WebSocket.OPEN;
   }
 
-  return { connect, sendCommand, disconnect, isConnected };
+  return { connect, send, sendCommand, disconnect, isConnected, on };
 })();

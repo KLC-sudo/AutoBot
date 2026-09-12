@@ -2,16 +2,17 @@
    agent.js — Hermes Agent Brain (OpenRouter + Tool Execution)
    
    A full coding agent that:
-   - Receives user commands
+   - Receives user commands and conversation history
    - Thinks via OpenRouter API (any model)
    - Executes tools (file ops, shell, git)
+   - Tracks token usage per request
    - Streams status back to the WebSocket client
    ═══════════════════════════════════════════════════════════════════════ */
 
-const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
+const { getContextLength, estimateTokens } = require('./sessions');
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -216,33 +217,42 @@ async function executeTool(name, args, workdir) {
 }
 
 // ─── Agent Loop ───────────────────────────────────────────────────
-async function runAgent(userMessage, callbacks, workdir) {
-  const { onStatus, onCode, onText, onError } = callbacks;
+// Accepts existing session messages, appends user message, runs agent loop,
+// returns { messages, tokenUsage } for the session to persist.
+async function runAgent(userMessage, session, callbacks, workdir) {
+  const { onStatus, onCode, onText, onError, onTokenUpdate } = callbacks;
   const apiKey = process.env.OPENROUTER_API_KEY;
-  const model = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+  const model = session.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
 
   if (!apiKey) {
     onError('OPENROUTER_API_KEY is not set. Add it to Railway environment variables.');
-    return;
+    return null;
   }
 
   const systemMessage = SYSTEM_PROMPT.replace('{WORKDIR}', workdir);
 
+  // Build messages array from session history
   const messages = [
     { role: 'system', content: systemMessage },
+    ...session.messages,
     { role: 'user', content: userMessage },
   ];
 
+  const contextLength = getContextLength(model);
   const MAX_ITERATIONS = 15;
   let iteration = 0;
+  let totalUsage = { prompt: 0, completion: 0, total: 0 };
 
-  onStatus(`Using model: ${model}`);
+  // Accumulate new messages to return
+  const newMessages = [{ role: 'user', content: userMessage }];
+
+  onStatus(`Model: ${model} · Context: ${contextLength.toLocaleString()} tokens`);
 
   while (iteration < MAX_ITERATIONS) {
     iteration++;
 
     try {
-      onStatus(`Thinking... (step ${iteration})`);
+      onStatus(`Thinking... (step ${iteration}/${MAX_ITERATIONS})`);
 
       const response = await fetch(OPENROUTER_API, {
         method: 'POST',
@@ -264,26 +274,45 @@ async function runAgent(userMessage, callbacks, workdir) {
       if (!response.ok) {
         const errBody = await response.text();
         onError(`API error (${response.status}): ${errBody}`);
-        return;
+        return null;
       }
 
       const data = await response.json();
 
       if (!data.choices || !data.choices[0]) {
         onError('No response from API');
-        return;
+        return null;
+      }
+
+      // Track token usage from this request
+      if (data.usage) {
+        totalUsage.prompt += data.usage.prompt_tokens || 0;
+        totalUsage.completion += data.usage.completion_tokens || 0;
+        totalUsage.total += data.usage.total_tokens || 0;
+
+        const estMessages = messages.reduce((s, m) => s + estimateTokens(m.content || ''), 0);
+        onTokenUpdate({
+          prompt: totalUsage.prompt,
+          completion: totalUsage.completion,
+          total: totalUsage.total,
+          contextLength,
+          contextUsed: estMessages,
+          contextPercent: Math.round((estMessages / contextLength) * 100),
+          model,
+        });
       }
 
       const choice = data.choices[0];
       const assistantMessage = choice.message;
 
-      // Add assistant message to conversation
+      // Add to both working messages and session history
       messages.push(assistantMessage);
+      newMessages.push(assistantMessage);
 
       // If there are no tool calls, the agent is done
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
         onText(assistantMessage.content || '(No response)');
-        return;
+        return { messages: newMessages, tokenUsage: totalUsage };
       }
 
       // Process tool calls
@@ -296,7 +325,7 @@ async function runAgent(userMessage, callbacks, workdir) {
           fnArgs = {};
         }
 
-        onStatus(`Executing: ${fnName}(${JSON.stringify(fnArgs).substring(0, 120)}...)`);
+        onStatus(`Tool: ${fnName}(${JSON.stringify(fnArgs).substring(0, 100)}...)`);
 
         const result = await executeTool(fnName, fnArgs, workdir);
 
@@ -315,19 +344,22 @@ async function runAgent(userMessage, callbacks, workdir) {
         }
 
         // Add tool result to conversation
-        messages.push({
+        const toolMessage = {
           role: 'tool',
           tool_call_id: toolCall.id,
           content: JSON.stringify(result),
-        });
+        };
+        messages.push(toolMessage);
+        newMessages.push(toolMessage);
       }
     } catch (err) {
       onError(`Agent error: ${err.message}`);
-      return;
+      return null;
     }
   }
 
-  onStatus('Reached maximum iterations. Summarizing...');
+  // Max iterations reached — summarize
+  onStatus('Max steps reached. Summarizing...');
   messages.push({ role: 'user', content: 'You reached the max steps. Briefly summarize what you accomplished.' });
 
   try {
@@ -339,19 +371,24 @@ async function runAgent(userMessage, callbacks, workdir) {
         'HTTP-Referer': 'https://hermes-web-ui.up.railway.app',
         'X-Title': 'Hermes Agent',
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        max_tokens: 1024,
-      }),
+      body: JSON.stringify({ model, messages, max_tokens: 1024 }),
     });
 
     const finalData = await finalResponse.json();
     const summary = finalData.choices?.[0]?.message?.content || 'Task completed (max iterations reached).';
+    newMessages.push({ role: 'assistant', content: summary });
     onText(summary);
+
+    if (finalData.usage) {
+      totalUsage.prompt += finalData.usage.prompt_tokens || 0;
+      totalUsage.completion += finalData.usage.completion_tokens || 0;
+      totalUsage.total += finalData.usage.total_tokens || 0;
+    }
   } catch {
     onText('Task completed (max iterations reached).');
   }
+
+  return { messages: newMessages, tokenUsage: totalUsage };
 }
 
 module.exports = { runAgent };

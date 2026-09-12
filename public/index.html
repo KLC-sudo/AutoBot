@@ -9,33 +9,20 @@
 </head>
 <body>
 
-  <!-- ═══════════════════════════════════════════════════════════════ -->
-  <!-- LOGIN OVERLAY                                                  -->
-  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- LOGIN OVERLAY -->
   <div id="login-overlay" class="overlay">
     <div class="login-card">
       <div class="login-icon">🔐</div>
       <h1 class="login-title">Hermes Agent</h1>
       <p class="login-subtitle">Enter your access token to initialize a secure session.</p>
-
       <div id="login-error" class="login-error hidden"></div>
-
       <form id="login-form">
-        <input
-          type="password"
-          id="auth-token"
-          class="input-field"
-          placeholder="Access Token"
-          autocomplete="off"
-          spellcheck="false"
-          autofocus
-        >
+        <input type="password" id="auth-token" class="input-field" placeholder="Access Token" autocomplete="off" spellcheck="false" autofocus>
         <button type="submit" id="login-btn" class="btn-primary">
           <span id="login-btn-text">Authenticate</span>
           <span id="login-btn-spinner" class="spinner hidden"></span>
         </button>
       </form>
-
       <div class="login-footer">
         <span class="status-dot offline"></span>
         <span id="login-status-text">Disconnected</span>
@@ -43,20 +30,39 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════════════ -->
-  <!-- MAIN DASHBOARD                                                 -->
-  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- MAIN DASHBOARD -->
   <main id="dashboard" class="dashboard hidden">
 
-    <!-- LEFT PANEL: Terminal / Chat Log -->
+    <!-- LEFT: Sessions Sidebar (collapsible) -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <h2 class="sidebar-title">Sessions</h2>
+        <button id="new-session-btn" class="btn-icon" title="New session">+</button>
+      </div>
+      <div id="session-list" class="session-list"></div>
+      <div class="sidebar-footer">
+        <button id="toggle-sidebar-btn" class="btn-icon" title="Collapse sidebar">◀</button>
+      </div>
+    </aside>
+
+    <!-- CENTER: Terminal / Chat Log -->
     <section class="panel panel-terminal">
       <header class="panel-header">
         <div class="panel-header-left">
+          <button id="show-sidebar-btn" class="btn-icon hidden" title="Show sessions">☰</button>
           <span id="conn-indicator" class="status-dot offline"></span>
-          <h2 class="panel-title">Execution Log</h2>
+          <h2 class="panel-title" id="session-title">New Session</h2>
         </div>
         <div class="panel-header-right">
-          <span id="conn-label" class="connection-label">Disconnected</span>
+          <!-- Token Usage Bar -->
+          <div id="token-bar" class="token-bar">
+            <div id="token-fill" class="token-fill" style="width:0%"></div>
+          </div>
+          <span id="token-label" class="token-label">0 tokens</span>
+          <!-- Model Selector -->
+          <select id="model-select" class="model-select">
+            <option value="">Loading models...</option>
+          </select>
           <button id="clear-btn" class="btn-icon" title="Clear log">✕</button>
         </div>
       </header>
@@ -65,22 +71,14 @@
 
       <footer class="input-bar">
         <form id="cmd-form">
-          <input
-            type="text"
-            id="cmd-input"
-            class="input-field input-command"
-            placeholder="Instruct the agent..."
-            autocomplete="off"
-            spellcheck="false"
-            disabled
-          >
+          <input type="text" id="cmd-input" class="input-field input-command" placeholder="Instruct the agent..." autocomplete="off" spellcheck="false" disabled>
           <button type="submit" id="send-btn" class="btn-send" disabled title="Send (Enter)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
           </button>
         </form>
         <div class="input-bar-footer">
           <span class="text-muted text-xs">↑↓ History · Enter to send</span>
-          <span id="cmd-counter" class="text-muted text-xs">0 commands</span>
+          <span id="cmd-counter" class="text-muted text-xs"></span>
         </div>
       </footer>
     </section>
@@ -96,13 +94,10 @@
           <button class="btn-icon btn-tab" data-view="diff">Diff</button>
         </div>
       </header>
-
       <div id="code-filename" class="code-filename">No file loaded</div>
-
       <div id="code-canvas" class="code-canvas">
         <pre><code id="code-content">// Waiting for agent output...</code></pre>
       </div>
-
       <div id="diff-canvas" class="code-canvas hidden">
         <pre><code id="diff-content">// Diff view will appear here...</code></pre>
       </div>

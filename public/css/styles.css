@@ -427,3 +427,170 @@ html, body {
   animation: fadeIn 0.2s ease-out;
   box-shadow: 0 8px 24px rgba(0,0,0,0.4);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   SIDEBAR — Sessions List
+   ═══════════════════════════════════════════════════════════════════ */
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width 0.2s, min-width 0.2s;
+}
+
+.sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.sidebar-footer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-bottom: 2px;
+}
+
+.session-item:hover { background: var(--bg-elevated); }
+
+.session-item.active {
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+}
+
+.session-item-name {
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  display: flex;
+  gap: 8px;
+}
+
+.session-item-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  float: right;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.session-item:hover .session-item-delete { opacity: 1; }
+.session-item-delete:hover { color: var(--error); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   TOKEN BAR
+   ═══════════════════════════════════════════════════════════════════ */
+.token-bar {
+  width: 80px;
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.token-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 3px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.token-fill.warning { background: var(--accent); }
+.token-fill.danger { background: var(--error); }
+
+.token-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   MODEL SELECTOR
+   ═══════════════════════════════════════════════════════════════════ */
+.model-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 4px 8px;
+  outline: none;
+  cursor: pointer;
+  max-width: 180px;
+}
+
+.model-select:focus { border-color: var(--border-focus); }
+
+/* ─── Btn Icon ──────────────────────────────────────────────────── */
+.btn-icon {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+.btn-icon:hover { color: var(--text-primary); background: var(--bg-elevated); }
+
+@media (max-width: 768px) {
+  .sidebar { position: fixed; z-index: 50; height: 100vh; left: 0; top: 0; }
+  .sidebar.collapsed { width: 0; }
+  .token-bar { width: 50px; }
+  .token-label { display: none; }
+}

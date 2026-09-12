@@ -8,6 +8,7 @@ const cors = require('cors');
 const path = require('path');
 const crypto = require('crypto');
 const { runAgent } = require('./agent');
+const sessions = require('./sessions');
 
 // ─── Configuration ───────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
@@ -24,13 +25,9 @@ if (!UI_PASSWORD || UI_PASSWORD === 'change_this_immediately') {
 
 // ─── Express App ─────────────────────────────────────────────────────
 const app = express();
-
-// Trust Railway's reverse proxy so rate-limit sees real client IPs
 app.set('trust proxy', 1);
-
 const server = http.createServer(app);
 
-// Security headers via Helmet
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -50,7 +47,6 @@ app.use(helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 
-// CORS — only allow the configured Railway origin
 app.use(cors({
   origin: ALLOWED_ORIGIN,
   methods: ['GET', 'POST'],
@@ -58,10 +54,8 @@ app.use(cors({
   credentials: false,
 }));
 
-// Body parser with size limit
 app.use(express.json({ limit: '16kb' }));
 
-// Global rate limiter
 const globalLimiter = rateLimit({
   windowMs: RATE_WINDOW,
   max: RATE_MAX,
@@ -71,32 +65,24 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-// ─── Static Files (no auth needed — UI is public, auth happens at WS level) ─
-app.use(express.static(path.join(__dirname, 'public'), {
-  maxAge: '1h',
-  etag: true,
-  lastModified: true,
-}));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', etag: true }));
 
-// ─── Health Check ────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// ─── API Auth Middleware ─────────────────────────────────────────────
+// ─── API Auth ────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing or malformed Authorization header' });
   }
-  const token = authHeader.slice(7);
-  if (!timingSafeCompare(token, UI_PASSWORD)) {
+  if (!timingSafeCompare(authHeader.slice(7), UI_PASSWORD)) {
     return res.status(403).json({ error: 'Invalid token' });
   }
   next();
 }
 
-// Timing-safe string comparison to prevent timing attacks
 function timingSafeCompare(a, b) {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
@@ -107,149 +93,32 @@ function timingSafeCompare(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-// ─── API Endpoints (all require auth) ───────────────────────────────
 app.get('/api/status', requireAuth, (_req, res) => {
-  res.json({
-    status: 'operational',
-    agent: 'hermes',
-    uptime: process.uptime(),
-    connections: wss.clients.size,
-  });
+  res.json({ status: 'operational', agent: 'hermes', uptime: process.uptime(), connections: wss.clients.size });
 });
 
-// Catch-all: serve index.html for SPA routing
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ─── WebSocket Server ───────────────────────────────────────────────
-const wss = new WebSocket.Server({
-  noServer: true,
-  maxPayload: WS_MAX_PAYLOAD,
-  perMessageDeflate: false,
-});
+const wss = new WebSocket.Server({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
 
-// ─── WS Authentication ─────────────────────────────────────────────
-// Instead of token-in-query (logged by proxies), we use a first-message handshake.
-// Client must send { type: "auth", token: "..." } within 5 seconds of connection.
-// If no valid auth message arrives, the socket is destroyed.
 server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, (ws) => {
     ws._authenticated = false;
     ws._authTimeout = setTimeout(() => {
       if (!ws._authenticated) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Auth timeout. Disconnecting.' }));
+        ws.send(JSON.stringify({ type: 'error', message: 'Auth timeout.' }));
         ws.terminate();
       }
     }, 5000);
-
     wss.emit('connection', ws, request);
   });
 });
 
-// ─── Active Connection Tracking ──────────────────────────────────────
-const activeConnections = new Map(); // ws -> { id, connectedAt }
-
-// ─── WebSocket Connection Handler ───────────────────────────────────
-wss.on('connection', (ws, request) => {
-  const connectionId = crypto.randomUUID();
-  const clientIp = request.headers['x-forwarded-for'] || request.socket.remoteAddress;
-
-  console.log(`[WS] New connection ${connectionId} from ${clientIp}`);
-
-  ws.on('message', (raw) => {
-    let payload;
-    try {
-      payload = JSON.parse(raw.toString());
-    } catch {
-      ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON payload.' }));
-      return;
-    }
-
-    // ── Auth Handshake ──
-    if (!ws._authenticated) {
-      if (payload.type !== 'auth' || !payload.token) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Expected auth message first.' }));
-        ws.terminate();
-        return;
-      }
-
-      if (!timingSafeCompare(payload.token, UI_PASSWORD)) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Invalid token. Disconnecting.' }));
-        ws.terminate();
-        return;
-      }
-
-      clearTimeout(ws._authTimeout);
-      ws._authenticated = true;
-      ws._connectionId = connectionId;
-      ws._connectedAt = Date.now();
-      activeConnections.set(ws, { id: connectionId, connectedAt: Date.now() });
-
-      ws.send(JSON.stringify({
-        type: 'auth_success',
-        message: 'Authenticated. Hermes Agent ready.',
-        connectionId,
-      }));
-
-      console.log(`[WS] Authenticated: ${connectionId}`);
-      return;
-    }
-
-    // ── Authenticated Command Processing ──
-    handleCommand(ws, payload, connectionId);
-  });
-
-  ws.on('close', () => {
-    activeConnections.delete(ws);
-    console.log(`[WS] Disconnected: ${connectionId}`);
-  });
-
-  ws.on('error', (err) => {
-    console.error(`[WS] Error on ${connectionId}:`, err.message);
-    activeConnections.delete(ws);
-  });
-
-  ws.on('pong', () => { ws._isAlive = true; });
-});
-
-// ─── Heartbeat: Kill stale connections every 30s ────────────────────
-const heartbeatInterval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws._isAlive === false) return ws.terminate();
-    ws._isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
-wss.on('close', () => clearInterval(heartbeatInterval));
-
-// ─── Command Handler ────────────────────────────────────────────────
-function handleCommand(ws, payload, connectionId) {
-  if (payload.type !== 'command' || typeof payload.data !== 'string') {
-    ws.send(JSON.stringify({ type: 'error', message: 'Invalid command format. Expected { type: "command", data: "..." }' }));
-    return;
-  }
-
-  const command = payload.data.trim();
-  if (command.length === 0 || command.length > 10000) {
-    ws.send(JSON.stringify({ type: 'error', message: 'Command must be 1-10000 characters.' }));
-    return;
-  }
-
-  console.log(`[CMD] ${connectionId}: ${command}`);
-
-  const workdir = process.env.WORKDIR || path.join(__dirname, 'workspace');
-
-  runAgent(command, {
-    onStatus:  (msg)  => sendFrame(ws, 'status', { message: msg }),
-    onCode:    (file, content) => sendFrame(ws, 'code', { filename: file, data: content }),
-    onText:    (msg)  => sendFrame(ws, 'text', { message: msg }),
-    onError:   (msg)  => sendFrame(ws, 'error', { message: msg }),
-  }, workdir).catch(err => {
-    sendFrame(ws, 'error', { message: `Agent crashed: ${err.message}` });
-  });
-}
+// ─── Per-connection state ────────────────────────────────────────────
+const connections = new Map(); // ws -> { id, session, processing }
 
 function sendFrame(ws, type, data) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -257,34 +126,216 @@ function sendFrame(ws, type, data) {
   }
 }
 
-// ─── Graceful Shutdown ──────────────────────────────────────────────
-function shutdown(signal) {
-  console.log(`\n[SHUTDOWN] Received ${signal}. Closing connections...`);
-  clearInterval(heartbeatInterval);
+// ─── Connection Handler ─────────────────────────────────────────────
+wss.on('connection', (ws, request) => {
+  const connectionId = crypto.randomUUID();
+  console.log(`[WS] Connected: ${connectionId}`);
 
+  connections.set(ws, { id: connectionId, session: null, processing: false });
+
+  ws.on('message', async (raw) => {
+    let payload;
+    try {
+      payload = JSON.parse(raw.toString());
+    } catch {
+      return sendFrame(ws, 'error', { message: 'Invalid JSON.' });
+    }
+
+    const conn = connections.get(ws);
+    if (!conn) return;
+
+    // ── Auth Handshake ──
+    if (!ws._authenticated) {
+      if (payload.type !== 'auth' || !payload.token) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Expected auth.' }));
+        return ws.terminate();
+      }
+      if (!timingSafeCompare(payload.token, UI_PASSWORD)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid token.' }));
+        return ws.terminate();
+      }
+      clearTimeout(ws._authTimeout);
+      ws._authenticated = true;
+
+      // Send available models list
+      sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
+
+      // Create a default session
+      const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+      conn.session = sessions.createSession(null, defaultModel);
+      await sessions.saveSession(conn.session);
+
+      sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+      sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
+      console.log(`[WS] Authenticated: ${connectionId}`);
+      return;
+    }
+
+    // ── All other messages require auth ──
+    if (conn.processing && payload.type === 'command') {
+      return sendFrame(ws, 'error', { message: 'Agent is busy. Please wait.' });
+    }
+
+    switch (payload.type) {
+      case 'command':
+        await handleCommand(ws, conn, payload);
+        break;
+
+      case 'session_list':
+        await handleSessionList(ws);
+        break;
+
+      case 'session_create':
+        await handleSessionCreate(ws, conn, payload);
+        break;
+
+      case 'session_load':
+        await handleSessionLoad(ws, conn, payload);
+        break;
+
+      case 'session_delete':
+        await handleSessionDelete(ws, payload);
+        break;
+
+      case 'model_switch':
+        await handleModelSwitch(ws, conn, payload);
+        break;
+
+      default:
+        sendFrame(ws, 'error', { message: `Unknown type: ${payload.type}` });
+    }
+  });
+
+  ws.on('close', () => {
+    const conn = connections.get(ws);
+    console.log(`[WS] Disconnected: ${conn?.id}`);
+    connections.delete(ws);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[WS] Error:`, err.message);
+    connections.delete(ws);
+  });
+
+  ws.on('pong', () => { ws._isAlive = true; });
+});
+
+// ─── Heartbeat ──────────────────────────────────────────────────────
+const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
-    ws.send(JSON.stringify({ type: 'status', message: 'Server shutting down.' }));
-    ws.close(1001, 'Server shutting down');
+    if (ws._isAlive === false) return ws.terminate();
+    ws._isAlive = false;
+    ws.ping();
   });
+}, 30000);
+wss.on('close', () => clearInterval(heartbeatInterval));
 
-  wss.close(() => {
-    server.close(() => {
-      console.log('[SHUTDOWN] Clean exit.');
-      process.exit(0);
-    });
-  });
+// ─── Command Handler ────────────────────────────────────────────────
+async function handleCommand(ws, conn, payload) {
+  const command = (payload.data || '').trim();
+  if (!command) return sendFrame(ws, 'error', { message: 'Empty command.' });
+  if (command.length > 10000) return sendFrame(ws, 'error', { message: 'Command too long (max 10000 chars).' });
 
-  setTimeout(() => process.exit(1), 5000);
+  conn.processing = true;
+  const workdir = process.env.WORKDIR || path.join(__dirname, 'workspace');
+
+  console.log(`[CMD] ${conn.id}: ${command}`);
+
+  try {
+    const result = await runAgent(command, conn.session, {
+      onStatus:      (msg)  => sendFrame(ws, 'status', { message: msg }),
+      onCode:        (file, content) => sendFrame(ws, 'code', { filename: file, data: content }),
+      onText:        (msg)  => sendFrame(ws, 'text', { message: msg }),
+      onError:       (msg)  => sendFrame(ws, 'error', { message: msg }),
+      onTokenUpdate: (data) => sendFrame(ws, 'tokens', data),
+    }, workdir);
+
+    if (result) {
+      // Append new messages to session
+      conn.session.messages.push(...result.messages);
+      conn.session.tokenUsage.prompt += result.tokenUsage.prompt;
+      conn.session.tokenUsage.completion += result.tokenUsage.completion;
+      conn.session.tokenUsage.total += result.tokenUsage.total;
+      await sessions.saveSession(conn.session);
+
+      sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+    }
+  } catch (err) {
+    sendFrame(ws, 'error', { message: `Agent crashed: ${err.message}` });
+  } finally {
+    conn.processing = false;
+  }
 }
 
+// ─── Session Handlers ───────────────────────────────────────────────
+async function handleSessionList(ws) {
+  const list = await sessions.listSessions();
+  sendFrame(ws, 'session_list', { sessions: list });
+}
+
+async function handleSessionCreate(ws, conn, payload) {
+  const model = payload.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+  const name = payload.name || null;
+  conn.session = sessions.createSession(name, model);
+  await sessions.saveSession(conn.session);
+  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+  sendFrame(ws, 'status', { message: `New session created (${model})` });
+}
+
+async function handleSessionLoad(ws, conn, payload) {
+  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
+  const loaded = await sessions.loadSession(payload.id);
+  if (!loaded) return sendFrame(ws, 'error', { message: 'Session not found.' });
+  conn.session = loaded;
+  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+  sendFrame(ws, 'status', { message: `Loaded: ${loaded.name}` });
+
+  // Replay conversation history to client
+  for (const msg of loaded.messages) {
+    if (msg.role === 'user') {
+      sendFrame(ws, 'history', { role: 'user', content: msg.content });
+    } else if (msg.role === 'assistant' && msg.content) {
+      sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
+    }
+  }
+}
+
+async function handleSessionDelete(ws, payload) {
+  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
+  await sessions.deleteSession(payload.id);
+  sendFrame(ws, 'status', { message: 'Session deleted.' });
+}
+
+async function handleModelSwitch(ws, conn, payload) {
+  if (!payload.model) return sendFrame(ws, 'error', { message: 'Missing model name.' });
+  const contextLen = sessions.getContextLength(payload.model);
+  conn.session.model = payload.model;
+  await sessions.saveSession(conn.session);
+  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+  sendFrame(ws, 'status', { message: `Switched to ${payload.model} (${contextLen.toLocaleString()} token context)` });
+}
+
+// ─── Graceful Shutdown ──────────────────────────────────────────────
+function shutdown(signal) {
+  console.log(`\n[SHUTDOWN] ${signal}`);
+  clearInterval(heartbeatInterval);
+  wss.clients.forEach((ws) => {
+    ws.send(JSON.stringify({ type: 'status', message: 'Server shutting down.' }));
+    ws.close(1001);
+  });
+  wss.close(() => server.close(() => process.exit(0)));
+  setTimeout(() => process.exit(1), 5000);
+}
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ─── Start ──────────────────────────────────────────────────────────
-server.listen(PORT, () => {
-  console.log(`\n🚀 Hermes Web UI Gateway`);
-  console.log(`   Port:      ${PORT}`);
-  console.log(`   Origin:    ${ALLOWED_ORIGIN}`);
-  console.log(`   Status:    http://localhost:${PORT}/health`);
-  console.log(`   WebSocket: ws://localhost:${PORT}\n`);
+sessions.init().then(() => {
+  server.listen(PORT, () => {
+    console.log(`\n🚀 Hermes Web UI Gateway`);
+    console.log(`   Port:      ${PORT}`);
+    console.log(`   Origin:    ${ALLOWED_ORIGIN}`);
+    console.log(`   Status:    http://localhost:${PORT}/health`);
+    console.log(`   WebSocket: ws://localhost:${PORT}\n`);
+  });
 });
