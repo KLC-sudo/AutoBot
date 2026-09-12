@@ -139,6 +139,7 @@ function renderSessionList(sessions) {
     el.addEventListener('click', (e) => {
       if (e.target.classList.contains('session-item-delete')) return;
       WsClient.send('session_load', { id: s.id });
+      if (isMobile()) closeSidebar();
     });
 
     el.querySelector('.session-item-delete').addEventListener('click', (e) => {
@@ -210,9 +211,31 @@ function populateModels(models) {
 }
 
 /* ─── Sidebar Toggle ────────────────────────────────────────────── */
+function openSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  sidebar.classList.remove('collapsed');
+  backdrop.classList.add('visible');
+}
+
+function closeSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  sidebar.classList.add('collapsed');
+  backdrop.classList.remove('visible');
+}
+
 function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('collapsed');
-  document.getElementById('show-sidebar-btn').classList.toggle('hidden');
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar.classList.contains('collapsed')) {
+    openSidebar();
+  } else {
+    closeSidebar();
+  }
+}
+
+function isMobile() {
+  return window.innerWidth <= 768;
 }
 
 /* ─── Keyboard Shortcuts ────────────────────────────────────────── */
@@ -237,11 +260,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Sidebar
-  document.getElementById('toggle-sidebar-btn').addEventListener('click', toggleSidebar);
-  document.getElementById('show-sidebar-btn').addEventListener('click', toggleSidebar);
+  document.getElementById('toggle-sidebar-btn').addEventListener('click', closeSidebar);
+  document.getElementById('show-sidebar-btn').addEventListener('click', openSidebar);
+  document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
+  document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
   document.getElementById('new-session-btn').addEventListener('click', () => {
     const model = document.getElementById('model-select').value || 'openai/gpt-4o';
     WsClient.send('session_create', { model });
+    if (isMobile()) closeSidebar();
+  });
+  document.getElementById('new-session-btn-footer').addEventListener('click', () => {
+    const model = document.getElementById('model-select').value || 'openai/gpt-4o';
+    WsClient.send('session_create', { model });
+    if (isMobile()) closeSidebar();
   });
 
   // Model selector
@@ -257,6 +288,19 @@ document.addEventListener('DOMContentLoaded', () => {
   WsClient.on('sessionList', (pkt) => renderSessionList(pkt.sessions || []));
   WsClient.on('modelsList', (pkt) => populateModels(pkt.models || []));
   WsClient.on('disconnected', () => { currentSessionId = null; });
+
+  // Set initial sidebar state
+  if (isMobile()) {
+    document.getElementById('sidebar').classList.add('collapsed');
+  }
+
+  // Handle resize: close sidebar if switching to mobile
+  window.addEventListener('resize', () => {
+    if (isMobile()) {
+      document.getElementById('sidebar').classList.add('collapsed');
+      document.getElementById('sidebar-backdrop').classList.remove('visible');
+    }
+  });
 
   // Auto-reconnect
   const storedToken = Auth.getToken();
