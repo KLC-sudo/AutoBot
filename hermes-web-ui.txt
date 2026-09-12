@@ -1,0 +1,4 @@
+hermes-web-ui/
+├── server.js          (The backend API & WebSocket bridge)
+├── public/
+│   └── index.html     (The responsive UI & code viewer dashboard)

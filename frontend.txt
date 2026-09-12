@@ -1,0 +1,122 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes Core - Control Console</title>
+    <script src="https://tailwindcss.com"></script>
+    <style>
+        body { background-color: #09090b; color: #f4f4f5; font-family: monospace; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #27272a; border-radius: 4px; }
+    </style>
+</head>
+<body class="h-screen w-screen flex overflow-hidden">
+
+    <!-- 🔒 PHASE 1: LOGIN AUTHENTICATION OVERLAY -->
+    <div id="login-overlay" class="fixed inset-0 bg-zinc-950 flex flex-col items-center justify-center z-50 p-4">
+        <div class="bg-zinc-900 border border-zinc-800 p-6 rounded-lg max-w-md w-full shadow-2xl">
+            <h2 class="text-xl font-bold text-amber-500 mb-2">➡️ Initialize Secure Session</h2>
+            <p class="text-xs text-zinc-500 mb-4">Provide your custom WEB_UI_PASSWORD token to authorize the control link.</p>
+            <input type="password" id="auth-token" placeholder="Enter Access Token..." class="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm focus:outline-none focus:border-amber-500 text-white mb-4">
+            <button onclick="establishGatewayConnection()" class="w-full bg-amber-600 hover:bg-amber-500 text-black text-sm font-bold py-2 rounded transition-colors">Authenticate Connection</button>
+        </div>
+    </div>
+
+    <!-- 🌐 PHASE 3: MAIN CORE DASHBOARD CONTAINER (Hidden by default) -->
+    <main id="dashboard" class="hidden flex-1 flex flex-col md:flex-row h-full w-full">
+        
+        <!-- Left panel: Terminal Activity Log Stream -->
+        <section class="flex-1 flex flex-col border-b md:border-b-0 md:border-r border-zinc-800 h-1/2 md:h-full">
+            <header class="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <h1 class="text-sm font-bold tracking-wide">💡 HERMES CORE EXECUTION LOG</h1>
+                </div>
+                <span class="text-[10px] text-zinc-500 uppercase tracking-widest">Secure WebSocket Mode</span>
+            </header>
+
+            <!-- Rolling Chat/Terminal Window -->
+            <div id="terminal-stream" class="flex-1 p-4 overflow-y-auto custom-scrollbar space-y-3 text-sm"></div>
+
+            <!-- Dashboard Command Input Bar -->
+            <footer class="p-4 bg-zinc-900 border-t border-zinc-800">
+                <div class="flex gap-2">
+                    <input type="text" id="cmd-input" placeholder="Instruct the agent (e.g., 'Fix the navbar and push to main')..." class="flex-1 bg-zinc-950 border border-zinc-800 rounded px-4 py-3 text-sm focus:outline-none focus:border-amber-500 font-sans" onkeydown="if(event.key === 'Enter') dispatchInstruction()">
+                    <button onclick="dispatchInstruction()" class="bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold px-6 rounded uppercase tracking-wider transition-colors">Execute</button>
+                </div>
+            </footer>
+        </section>
+
+        <!-- Right panel: Code Viewer Canvas -->
+        <section class="w-full md:w-[45%] flex flex-col h-1/2 md:h-full bg-zinc-950">
+            <header class="bg-zinc-900 border-b border-zinc-800 px-4 py-3">
+                <h2 class="text-sm font-bold text-zinc-400">📊 ACTIVE CODE / FILE CANVAS</h2>
+                <p id="current-filename" class="text-[11px] text-amber-500 mt-0.5 tracking-tight italic">No file context loaded.</p>
+            </header>
+            <div class="flex-1 p-4 overflow-auto custom-scrollbar text-xs">
+                <pre class="w-full text-zinc-300 font-mono select-text selection:bg-zinc-800"><code id="code-canvas">// Pending agent execution output stream...</code></pre>
+            </div>
+        </section>
+    </main>
+
+    <!-- UI Logic Controller -->
+    <script>
+        let wsClient = null;
+
+        function establishGatewayConnection() {
+            const token = document.getElementById('auth-token').value;
+            if(!token) return alert("Please supply an execution token.");
+
+            const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const gatewayUrl = `${protocol}${window.location.host}?token=${encodeURIComponent(token)}`;
+
+            wsClient = new WebSocket(gatewayUrl);
+
+            wsClient.onopen = () => {
+                document.getElementById('login-overlay').classList.add('hidden');
+                document.getElementById('dashboard').classList.remove('hidden');
+            };
+
+            wsClient.onmessage = (event) => {
+                const packet = JSON.parse(event.data);
+                const stream = document.getElementById('terminal-stream');
+
+                if (packet.type === 'status') {
+                    stream.innerHTML += `<div class="text-zinc-500 text-xs">⚠️ [SYSTEM] ${packet.message}</div>`;
+                } else if (packet.type === 'text') {
+                    stream.innerHTML += `<div class="bg-zinc-900 border border-zinc-800 p-3 rounded text-zinc-200 shadow-md">🤖 <span class="font-sans leading-relaxed">${packet.message}</span></div>`;
+                } else if (packet.type === 'code') {
+                    stream.innerHTML += `<div class="text-amber-500 text-xs font-bold">✨ Updated file context: ${packet.filename}</div>`;
+                    document.getElementById('current-filename').innerText = packet.filename;
+                    document.getElementById('code-canvas').innerText = packet.data;
+                } else if (packet.type === 'error') {
+                    stream.innerHTML += `<div class="text-red-500 text-xs font-bold">❌ [ERROR] ${packet.message}</div>`;
+                }
+                
+                stream.scrollTop = stream.scrollHeight;
+            };
+
+            wsClient.onclose = () => {
+                alert("🔒 Session closed. Connection interrupted or password invalid.");
+                window.location.reload();
+            };
+        }
+
+        function dispatchInstruction() {
+            const input = document.getElementById('cmd-input');
+            const data = input.value.trim();
+            if(!data || !wsClient) return;
+
+            // Render user command in local UI immediately
+            const stream = document.getElementById('terminal-stream');
+            stream.innerHTML += `<div class="text-right"><span class="inline-block bg-amber-500/10 border border-amber-500/20 text-amber-400 p-3 rounded text-left font-sans text-sm max-w-[85%]">👤 ${data}</span></div>`;
+            
+            wsClient.send(JSON.stringify({ type: 'command', data: data }));
+            input.value = '';
+            stream.scrollTop = stream.scrollHeight;
+        }
+    </script>
+</body>
+</html>

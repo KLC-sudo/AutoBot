@@ -1,0 +1,80 @@
+// server.js
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ noServer: true });
+
+// Configuration - Ensure WEB_UI_PASSWORD is set in Railway Variables
+const PORT = process.env.PORT || 3000;
+const UI_PASSWORD = process.env.WEB_UI_PASSWORD || "change_this_immediately_on_railway";
+
+// Serve static HTML/JS dashboard
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Intercept HTTP upgrade to handle custom token-based handshake authentication
+server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url, `http://${request.headers.host}`);
+    const token = url.searchParams.get('token');
+
+    if (!token || token !== UI_PASSWORD) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+    });
+});
+
+// Handle live messaging stream
+wss.on('connection', (ws) => {
+    console.log('🔒 Secure connection established with Custom Web UI.');
+
+    // Welcome system alert frame
+    ws.send(JSON.stringify({ type: 'status', message: 'Connected to Hermes Agent loop securely.' }));
+
+    ws.on('message', (messageString) => {
+        try {
+            const payload = JSON.parse(messageString);
+            
+            if (payload.type === 'command') {
+                console.log(`📥 Instruction received from UI: "${payload.data}"`);
+
+                // --- INTEGRATION BENCHMARK ---
+                // This is where you pipe payload.data into the Hermes execution loop.
+                // Below simulates real-time data streaming back to the Web UI.
+                
+                ws.send(JSON.stringify({ type: 'status', message: '🤖 Agent processing task...' }));
+                
+                setTimeout(() => {
+                    ws.send(JSON.stringify({ type: 'status', message: '📁 Running git checkout...' }));
+                }, 1000);
+
+                setTimeout(() => {
+                    ws.send(JSON.stringify({ 
+                        type: 'code', 
+                        filename: 'src/components/Navbar.js', 
+                        data: `export const Navbar = () => {\n  return (\n    <nav className="bg-zinc-900 text-white p-4">\n      <h1 className="text-xl font-bold">Project Deployed via Railway!</h1>\n    </nav>\n  );\n};` 
+                    }));
+                }, 2500);
+
+                setTimeout(() => {
+                    ws.send(JSON.stringify({ type: 'text', message: 'Task complete! I created the navbar component and verified it works. Ready for next command.' }));
+                }, 4000);
+            }
+        } catch (err) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid payload schema format.' }));
+        }
+    });
+
+    ws.on('close', () => console.log('🔓 Connection closed.'));
+});
+
+server.listen(PORT, () => {
+    console.log(`🚀 Hermes Gateway running securely on port ${PORT}`);
+});
