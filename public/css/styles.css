@@ -243,6 +243,11 @@ html, body {
 
 .sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
 
+/* Hamburger button: show when sidebar collapsed, hide when open */
+#show-sidebar-btn { display: none; }
+.sidebar.collapsed ~ .panel-terminal #show-sidebar-btn,
+#show-sidebar-btn.visible { display: flex; }
+
 .sidebar-backdrop {
   display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
   z-index: 40; -webkit-tap-highlight-color: transparent;

@@ -214,15 +214,19 @@ function populateModels(models) {
 function openSidebar() {
   const sidebar = document.getElementById('sidebar');
   const backdrop = document.getElementById('sidebar-backdrop');
+  const hamburger = document.getElementById('show-sidebar-btn');
   sidebar.classList.remove('collapsed');
   backdrop.classList.add('visible');
+  hamburger.classList.remove('visible');
 }
 
 function closeSidebar() {
   const sidebar = document.getElementById('sidebar');
   const backdrop = document.getElementById('sidebar-backdrop');
+  const hamburger = document.getElementById('show-sidebar-btn');
   sidebar.classList.add('collapsed');
   backdrop.classList.remove('visible');
+  hamburger.classList.add('visible');
 }
 
 function toggleSidebar() {
@@ -292,14 +296,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (isMobile()) {
     document.getElementById('sidebar').classList.add('collapsed');
   }
-
-  // Handle resize: close sidebar if switching to mobile
-  window.addEventListener('resize', () => {
-    if (isMobile()) {
-      document.getElementById('sidebar').classList.add('collapsed');
-      document.getElementById('sidebar-backdrop').classList.remove('visible');
-    }
-  });
 
   // Auto-reconnect
   const storedToken = Auth.getToken();
