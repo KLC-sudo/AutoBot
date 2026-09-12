@@ -10,7 +10,7 @@ const CommandHistory = (() => {
   let index = -1;
 
   function push(cmd) {
-    if (cmd === history[history.length - 1]) return; // skip duplicate
+    if (cmd === history[history.length - 1]) return;
     history.push(cmd);
     if (history.length > MAX_HISTORY) history.shift();
     index = history.length;
@@ -46,50 +46,39 @@ const CodeViewer = (() => {
     const codeEl = document.getElementById('code-content');
     codeEl.textContent = data;
 
-    // Syntax highlighting (basic)
     _highlight(codeEl);
-
-    // Switch to code view
     switchCodeView('code');
   }
 
   function _highlight(codeEl) {
-    // Basic keyword highlighting for JS/JSX/TS/TSX
     let html = codeEl.textContent;
 
-    // Escape first
     const div = document.createElement('div');
     div.textContent = html;
     html = div.innerHTML;
 
-    // Keywords
     const keywords = ['import', 'export', 'from', 'const', 'let', 'var', 'function',
       'return', 'if', 'else', 'for', 'while', 'class', 'extends', 'new', 'this',
       'default', 'async', 'await', 'try', 'catch', 'throw', 'switch', 'case',
       'break', 'continue', 'typeof', 'instanceof', 'in', 'of', 'yield'];
 
-    // Strings
     html = html.replace(/(&#39;[^&#]*?&#39;|&quot;[^&]*?&quot;|`[^`]*?`)/g,
       '<span style="color:#a5d6ff">$1</span>');
 
-    // Comments
     html = html.replace(/(\/\/.*$)/gm, '<span style="color:#52525b;font-style:italic">$1</span>');
     html = html.replace(/(\/\*[\s\S]*?\*\/)/g, '<span style="color:#52525b;font-style:italic">$1</span>');
 
-    // Keywords
     keywords.forEach(kw => {
       const re = new RegExp(`\\b(${kw})\\b`, 'g');
       html = html.replace(re, '<span style="color:#ff7b72">$1</span>');
     });
 
-    // JSX tags
     html = html.replace(/(&lt;\/?)([\w.]+)/g, '$1<span style="color:#7ee787">$2</span>');
 
     codeEl.innerHTML = html;
   }
 
   function showDiff(filename, oldCode, newCode) {
-    // Simple line-by-line diff
     const oldLines = (oldCode || '').split('\n');
     const newLines = (newCode || '').split('\n');
     const diffLines = [];
@@ -156,13 +145,8 @@ function dispatchCommand(event) {
     return false;
   }
 
-  // Add to history
   CommandHistory.push(text);
-
-  // Render in terminal
   Terminal.addUser(text);
-
-  // Send to agent
   WsClient.sendCommand(text);
 
   input.value = '';
@@ -174,7 +158,6 @@ function dispatchCommand(event) {
 document.addEventListener('keydown', (e) => {
   const input = document.getElementById('cmd-input');
 
-  // Only handle history keys when input is focused
   if (document.activeElement === input) {
     if (e.key === 'ArrowUp') {
       e.preventDefault();
@@ -188,18 +171,32 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Ctrl+L to clear terminal
   if (e.key === 'l' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     clearTerminal();
   }
 });
 
-/* ─── Init: Check for stored session ────────────────────────────── */
-window.addEventListener('DOMContentLoaded', () => {
+/* ─── Event Listeners (CSP-safe: no inline handlers) ────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+
+  // Login form submit
+  document.getElementById('login-form').addEventListener('submit', handleLogin);
+
+  // Command form submit
+  document.getElementById('cmd-form').addEventListener('submit', dispatchCommand);
+
+  // Clear terminal button
+  document.getElementById('clear-btn').addEventListener('click', clearTerminal);
+
+  // Code/Diff tab buttons
+  document.querySelectorAll('.btn-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchCodeView(btn.dataset.view));
+  });
+
+  // Auto-reconnect with stored token
   const storedToken = Auth.getToken();
   if (storedToken) {
-    // Auto-reconnect with stored token
     setLoginLoading(true);
     WsClient.connect(storedToken);
   }

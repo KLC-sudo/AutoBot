@@ -20,7 +20,7 @@
 
       <div id="login-error" class="login-error hidden"></div>
 
-      <form id="login-form" onsubmit="return handleLogin(event)">
+      <form id="login-form">
         <input
           type="password"
           id="auth-token"
@@ -57,14 +57,14 @@
         </div>
         <div class="panel-header-right">
           <span id="conn-label" class="connection-label">Disconnected</span>
-          <button id="clear-btn" class="btn-icon" title="Clear log" onclick="clearTerminal()">✕</button>
+          <button id="clear-btn" class="btn-icon" title="Clear log">✕</button>
         </div>
       </header>
 
       <div id="terminal-stream" class="terminal-stream"></div>
 
       <footer class="input-bar">
-        <form id="cmd-form" onsubmit="return dispatchCommand(event)">
+        <form id="cmd-form">
           <input
             type="text"
             id="cmd-input"
@@ -92,8 +92,8 @@
           <h2 class="panel-title">Code Viewer</h2>
         </div>
         <div class="panel-header-right">
-          <button class="btn-icon btn-tab active" data-view="code" onclick="switchCodeView('code')">Code</button>
-          <button class="btn-icon btn-tab" data-view="diff" onclick="switchCodeView('diff')">Diff</button>
+          <button class="btn-icon btn-tab active" data-view="code">Code</button>
+          <button class="btn-icon btn-tab" data-view="diff">Diff</button>
         </div>
       </header>
 
