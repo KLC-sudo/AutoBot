@@ -35,10 +35,26 @@ const MODEL_CONTEXT_LENGTHS = {
   'meta-llama/llama-3-8b-instruct': 8192,
   'mistralai/mixtral-8x7b-instruct': 32768,
   'deepseek/deepseek-chat': 65536,
+  'deepseek/deepseek-r1': 65536,
+  'xiaomi/mimo-v2.5': 158000,
+  'xiaomi/mimo-v2': 158000,
+  'MiMo-V2.5': 158000,
+  'Xiaomi V2.5': 158000,
 };
 
 function getContextLength(model) {
-  return MODEL_CONTEXT_LENGTHS[model] || 128000; // default fallback
+  // Direct match
+  if (MODEL_CONTEXT_LENGTHS[model]) return MODEL_CONTEXT_LENGTHS[model];
+  // Case-insensitive partial match
+  const lower = (model || '').toLowerCase();
+  for (const [key, val] of Object.entries(MODEL_CONTEXT_LENGTHS)) {
+    if (lower.includes(key.toLowerCase()) || key.toLowerCase().includes(lower)) return val;
+  }
+  // Check for common patterns
+  if (lower.includes('claude') && lower.includes('3')) return 200000;
+  if (lower.includes('gemini') && lower.includes('1.5')) return 2000000;
+  if (lower.includes('mimo')) return 158000;
+  return 128000; // safe default
 }
 
 // ─── Session structure ───────────────────────────────────────────
