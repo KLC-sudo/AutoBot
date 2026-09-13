@@ -67,6 +67,17 @@ app.use(globalLimiter);
 
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true, lastModified: true }));
 
+// Force no-cache on HTML files (prevents stale mobile caches)
+app.use((req, res, next) => {
+  if (req.path.endsWith('.html') || req.path === '/') {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('Surrogate-Control', 'no-store');
+  }
+  next();
+});
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
