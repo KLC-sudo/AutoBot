@@ -178,6 +178,65 @@ html, body {
 .msg-code-update { background: rgba(245, 158, 11, 0.06); border: 1px solid var(--accent-border); color: var(--accent); font-size: 12px; font-weight: 600; }
 
 /* ═══════════════════════════════════════════════════════════════════
+   COLLAPSIBLE STATUS GROUP
+   ═══════════════════════════════════════════════════════════════════ */
+.msg-status-group {
+  background: none; border: none; padding: 0;
+}
+
+.status-group-summary {
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-group-summary::-webkit-details-marker { display: none; }
+
+.status-group-summary::before {
+  content: '▶';
+  font-size: 8px;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.msg-status-group[open] .status-group-summary::before {
+  transform: rotate(90deg);
+}
+
+.status-group-summary:hover {
+  background: var(--bg-card);
+  border-color: var(--accent-border);
+}
+
+.status-group-label {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.status-group-content {
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+}
+
+.status-line {
+  background: none !important;
+  border: none !important;
+  padding: 2px 8px !important;
+  font-size: 11px !important;
+  color: var(--text-muted) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    INPUT BAR
    ═══════════════════════════════════════════════════════════════════ */
 .input-bar { padding: 12px 16px; background: var(--bg-card); border-top: 1px solid var(--border); flex-shrink: 0; }

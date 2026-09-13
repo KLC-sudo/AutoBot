@@ -469,32 +469,62 @@ async function runAgent(userMessage, session, callbacks, workdir) {
 
   onStatus(`Model: ${model} · Context: ${contextLength.toLocaleString()} tokens`);
 
+  // Filter out any malformed messages from session history
+  const cleanMessages = session.messages.filter(m => {
+    if (!m || !m.role) return false;
+    if (m.role === 'tool' && !m.tool_call_id) return false;
+    if (m.role === 'assistant' && m.tool_calls) {
+      return m.tool_calls.every(tc => tc.id && tc.function?.name);
+    }
+    return true;
+  });
+
+  // Rebuild messages array with clean history
+  messages.length = 0;
+  messages.push({ role: 'system', content: systemMessage });
+  messages.push(...cleanMessages);
+  messages.push({ role: 'user', content: userMessage });
+
   while (iteration < MAX_ITERATIONS) {
     iteration++;
 
     try {
-      onStatus(`Thinking... (step ${iteration}/${MAX_ITERATIONS})`);
+      onStatus(`Thinking... (step ${iteration})`);
 
-      const response = await fetch(OPENROUTER_API, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://hermes-web-ui.up.railway.app',
-          'X-Title': 'Hermes Agent',
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          tools: TOOLS,
-          tool_choice: 'auto',
-          max_tokens: 4096,
-        }),
-      });
+      // Retry logic for network errors
+      let response = null;
+      let lastError = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          response = await fetch(OPENROUTER_API, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': 'https://hermes-web-ui.up.railway.app',
+              'X-Title': 'Hermes Agent',
+            },
+            body: JSON.stringify({
+              model,
+              messages,
+              tools: TOOLS,
+              tool_choice: 'auto',
+              max_tokens: 4096,
+            }),
+          });
+          if (response.ok) break;
+          lastError = `API ${response.status}`;
+        } catch (fetchErr) {
+          lastError = fetchErr.message;
+          if (attempt < 3) {
+            onStatus(`Network error, retrying in ${attempt * 2}s...`);
+            await new Promise(r => setTimeout(r, attempt * 2000));
+          }
+        }
+      }
 
-      if (!response.ok) {
-        const errBody = await response.text();
-        onError(`API error (${response.status}): ${errBody}`);
+      if (!response || !response.ok) {
+        onError(`API failed after 3 attempts: ${lastError}`);
         return null;
       }
 

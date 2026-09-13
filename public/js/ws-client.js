@@ -113,7 +113,7 @@ const WsClient = (() => {
         updateConnectionStatus('online');
         showDashboard();
         Terminal.addSystem(packet.message);
-        // Request session list and models after auth
+        // Request session list and models after auth (also on reconnect)
         setTimeout(() => {
           _send({ type: 'session_list' });
         }, 100);
@@ -180,6 +180,15 @@ const WsClient = (() => {
       hideReconnectBanner();
       _doConnect();
     }, delay);
+  }
+
+  // After successful reconnect, recover session state
+  function _recoverSession() {
+    if (!_token) return;
+    // Request session list and models after reconnect
+    setTimeout(() => {
+      _send({ type: 'session_list' });
+    }, 200);
   }
 
   function showReconnectBanner(seconds) {
