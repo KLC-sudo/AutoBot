@@ -197,6 +197,10 @@ wss.on('connection', (ws, request) => {
         await handleSessionDelete(ws, payload);
         break;
 
+      case 'session_rename':
+        await handleSessionRename(ws, payload);
+        break;
+
       case 'model_switch':
         await handleModelSwitch(ws, conn, payload);
         break;
@@ -304,6 +308,19 @@ async function handleSessionDelete(ws, payload) {
   if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
   await sessions.deleteSession(payload.id);
   sendFrame(ws, 'status', { message: 'Session deleted.' });
+}
+
+async function handleSessionRename(ws, payload) {
+  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
+  if (!payload.name) return sendFrame(ws, 'error', { message: 'Missing new name.' });
+  const session = await sessions.loadSession(payload.id);
+  if (!session) return sendFrame(ws, 'error', { message: 'Session not found.' });
+  session.name = payload.name;
+  await sessions.saveSession(session);
+  sendFrame(ws, 'status', { message: `Renamed to "${payload.name}"` });
+  // Refresh session list
+  const list = await sessions.listSessions();
+  sendFrame(ws, 'session_list', { sessions: list });
 }
 
 async function handleModelSwitch(ws, conn, payload) {

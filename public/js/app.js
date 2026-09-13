@@ -128,7 +128,7 @@ function renderSessionList(sessions) {
 
     el.innerHTML = `
       <button class="session-item-delete" data-id="${s.id}" title="Delete">×</button>
-      <div class="session-item-name">${_esc(s.name || 'Untitled')}</div>
+      <div class="session-item-name" title="Double-click to rename">${_esc(s.name || 'Untitled')}</div>
       <div class="session-item-meta">
         <span>${s.model?.split('/').pop() || '?'}</span>
         <span>${tokens}</span>
@@ -138,8 +138,39 @@ function renderSessionList(sessions) {
 
     el.addEventListener('click', (e) => {
       if (e.target.classList.contains('session-item-delete')) return;
+      if (e.target.classList.contains('session-item-name') && e.detail === 2) return; // double-click handled below
       WsClient.send('session_load', { id: s.id });
       if (isMobile()) closeSidebar();
+    });
+
+    // Double-click name to rename
+    el.querySelector('.session-item-name').addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const nameEl = e.target;
+      const currentName = s.name || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = currentName;
+      input.className = 'session-rename-input';
+      input.style.cssText = 'width:100%;background:var(--bg-input);border:1px solid var(--accent);color:var(--text-primary);padding:2px 4px;border-radius:3px;font-size:12px;font-family:var(--font-sans);outline:none;';
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      const save = () => {
+        const newName = input.value.trim() || currentName;
+        if (newName !== currentName) {
+          WsClient.send('session_rename', { id: s.id, name: newName });
+        }
+        nameEl.textContent = newName || 'Untitled';
+        input.replaceWith(nameEl);
+      };
+
+      input.addEventListener('blur', save);
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') save();
+        if (ev.key === 'Escape') { input.replaceWith(nameEl); }
+      });
     });
 
     el.querySelector('.session-item-delete').addEventListener('click', (e) => {
@@ -269,12 +300,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
   document.getElementById('new-session-btn').addEventListener('click', () => {
     const model = document.getElementById('model-select').value || 'openai/gpt-4o';
-    WsClient.send('session_create', { model });
+    const name = prompt('Session name (optional):') || undefined;
+    WsClient.send('session_create', { model, name });
     if (isMobile()) closeSidebar();
   });
   document.getElementById('new-session-btn-footer').addEventListener('click', () => {
     const model = document.getElementById('model-select').value || 'openai/gpt-4o';
-    WsClient.send('session_create', { model });
+    const name = prompt('Session name (optional):') || undefined;
+    WsClient.send('session_create', { model, name });
     if (isMobile()) closeSidebar();
   });
 
