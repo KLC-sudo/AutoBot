@@ -138,9 +138,16 @@ function renderSessionList(sessions) {
 
     el.addEventListener('click', (e) => {
       if (e.target.classList.contains('session-item-delete')) return;
-      if (e.target.classList.contains('session-item-name') && e.detail === 2) return; // double-click handled below
+      if (e.target.classList.contains('session-item-name') && e.detail === 2) return;
+      // Load session first, then close sidebar on mobile
       WsClient.send('session_load', { id: s.id });
-      if (isMobile()) closeSidebar();
+      currentSessionId = s.id;
+      // Update active state immediately
+      document.querySelectorAll('.session-item').forEach(item => item.classList.remove('active'));
+      el.classList.add('active');
+      if (isMobile()) {
+        setTimeout(() => closeSidebar(), 150);
+      }
     });
 
     // Double-click name to rename

@@ -113,6 +113,10 @@ const WsClient = (() => {
         updateConnectionStatus('online');
         showDashboard();
         Terminal.addSystem(packet.message);
+        // Request session list and models after auth
+        setTimeout(() => {
+          _send({ type: 'session_list' });
+        }, 100);
         break;
 
       case 'error':

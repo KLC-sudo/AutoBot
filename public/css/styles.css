@@ -246,6 +246,12 @@ html, body {
 /* Hamburger button always visible, hidden via JS when sidebar is open */
 #show-sidebar-btn { display: flex; }
 
+/* Mobile: force hamburger visible when sidebar is collapsed */
+@media (max-width: 768px) {
+  #show-sidebar-btn { display: flex !important; }
+  .sidebar:not(.collapsed) ~ .panel-terminal #show-sidebar-btn { display: none !important; }
+}
+
 .sidebar-backdrop {
   display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
   z-index: 40; -webkit-tap-highlight-color: transparent;
@@ -316,9 +322,10 @@ html, body {
    RESPONSIVE
    ═══════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  .dashboard { flex-direction: column; }
-  .panel-terminal { border-right: none; border-bottom: 1px solid var(--border); }
-  .panel-code { width: 100%; min-width: unset; height: 40vh; }
+  .dashboard {
+    flex-direction: column;
+    position: relative;
+  }
 
   .sidebar {
     position: fixed; z-index: 50; height: 100dvh; left: 0; top: 0;
@@ -326,7 +333,24 @@ html, body {
     transition: transform 0.25s ease;
   }
 
-  .sidebar.collapsed { transform: translateX(-100%); width: 260px; min-width: 260px; border-right: 1px solid var(--border); }
+  .sidebar.collapsed {
+    transform: translateX(-100%);
+    width: 260px; min-width: 260px;
+    border-right: 1px solid var(--border);
+  }
+
+  .panel-terminal {
+    border-right: none;
+    border-bottom: none;
+    width: 100%;
+    height: 100vh;
+    position: relative;
+    z-index: 1;
+  }
+
+  .panel-code {
+    display: none;
+  }
 
   .panel-header { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
   .panel-header-right { gap: 4px; }
@@ -334,7 +358,7 @@ html, body {
   .token-label { display: none; }
   .model-select { max-width: 120px; font-size: 10px; }
 
-  .input-bar { padding: 8px 12px; }
+  .input-bar { padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .input-bar form { gap: 6px; }
   .input-command { padding: 10px 12px; font-size: 13px; }
   .btn-send { width: 40px; height: 40px; }
@@ -342,8 +366,6 @@ html, body {
 
   .terminal-stream { padding: 12px; }
   .msg { padding: 8px 10px; font-size: 12px; }
-
-  .panel-code { display: none; }
 }
 
 @media (max-width: 480px) {
@@ -351,4 +373,9 @@ html, body {
   .panel-title { font-size: 10px; }
   .input-command { font-size: 12px; padding: 8px 10px; }
   .btn-send { width: 36px; height: 36px; }
+}
+
+/* Safe area for notch phones */
+@supports (padding: max(0px)) {
+  .input-bar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
 }
