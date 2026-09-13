@@ -243,10 +243,8 @@ html, body {
 
 .sidebar.collapsed { width: 0; min-width: 0; border-right: none; }
 
-/* Hamburger button: show when sidebar collapsed, hide when open */
-#show-sidebar-btn { display: none; }
-.sidebar.collapsed ~ .panel-terminal #show-sidebar-btn,
-#show-sidebar-btn.visible { display: flex; }
+/* Hamburger button always visible, hidden via JS when sidebar is open */
+#show-sidebar-btn { display: flex; }
 
 .sidebar-backdrop {
   display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
@@ -320,7 +318,7 @@ html, body {
 @media (max-width: 768px) {
   .dashboard { flex-direction: column; }
   .panel-terminal { border-right: none; border-bottom: 1px solid var(--border); }
-  .panel-code { width: 100%; min-width: unset; }
+  .panel-code { width: 100%; min-width: unset; height: 40vh; }
 
   .sidebar {
     position: fixed; z-index: 50; height: 100dvh; left: 0; top: 0;
@@ -330,6 +328,27 @@ html, body {
 
   .sidebar.collapsed { transform: translateX(-100%); width: 260px; min-width: 260px; border-right: 1px solid var(--border); }
 
+  .panel-header { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
+  .panel-header-right { gap: 4px; }
   .token-bar { width: 50px; }
   .token-label { display: none; }
+  .model-select { max-width: 120px; font-size: 10px; }
+
+  .input-bar { padding: 8px 12px; }
+  .input-bar form { gap: 6px; }
+  .input-command { padding: 10px 12px; font-size: 13px; }
+  .btn-send { width: 40px; height: 40px; }
+  .input-bar-footer { font-size: 10px; }
+
+  .terminal-stream { padding: 12px; }
+  .msg { padding: 8px 10px; font-size: 12px; }
+
+  .panel-code { display: none; }
+}
+
+@media (max-width: 480px) {
+  .panel-header-left { gap: 4px; }
+  .panel-title { font-size: 10px; }
+  .input-command { font-size: 12px; padding: 8px 10px; }
+  .btn-send { width: 36px; height: 36px; }
 }

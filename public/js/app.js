@@ -146,6 +146,7 @@ function renderSessionList(sessions) {
     // Double-click name to rename
     el.querySelector('.session-item-name').addEventListener('dblclick', (e) => {
       e.stopPropagation();
+      e.preventDefault();
       const nameEl = e.target;
       const currentName = s.name || '';
       const input = document.createElement('input');
@@ -157,19 +158,32 @@ function renderSessionList(sessions) {
       input.focus();
       input.select();
 
+      let saved = false;
       const save = () => {
+        if (saved) return;
+        saved = true;
         const newName = input.value.trim() || currentName;
         if (newName !== currentName) {
           WsClient.send('session_rename', { id: s.id, name: newName });
         }
-        nameEl.textContent = newName || 'Untitled';
-        input.replaceWith(nameEl);
+        const newNameEl = document.createElement('div');
+        newNameEl.className = 'session-item-name';
+        newNameEl.title = 'Double-click to rename';
+        newNameEl.textContent = newName || 'Untitled';
+        input.replaceWith(newNameEl);
+        // Re-attach double-click listener to new element
+        newNameEl.addEventListener('dblclick', (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          // Trigger rename on the new element
+          newNameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        });
       };
 
       input.addEventListener('blur', save);
       input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') save();
-        if (ev.key === 'Escape') { input.replaceWith(nameEl); }
+        if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+        if (ev.key === 'Escape') { saved = true; input.replaceWith(nameEl); }
       });
     });
 
@@ -248,7 +262,7 @@ function openSidebar() {
   const hamburger = document.getElementById('show-sidebar-btn');
   sidebar.classList.remove('collapsed');
   backdrop.classList.add('visible');
-  hamburger.classList.remove('visible');
+  hamburger.style.display = 'none';
 }
 
 function closeSidebar() {
@@ -257,7 +271,7 @@ function closeSidebar() {
   const hamburger = document.getElementById('show-sidebar-btn');
   sidebar.classList.add('collapsed');
   backdrop.classList.remove('visible');
-  hamburger.classList.add('visible');
+  hamburger.style.display = 'flex';
 }
 
 function toggleSidebar() {
@@ -304,12 +318,6 @@ document.addEventListener('DOMContentLoaded', () => {
     WsClient.send('session_create', { model, name });
     if (isMobile()) closeSidebar();
   });
-  document.getElementById('new-session-btn-footer').addEventListener('click', () => {
-    const model = document.getElementById('model-select').value || 'openai/gpt-4o';
-    const name = prompt('Session name (optional):') || undefined;
-    WsClient.send('session_create', { model, name });
-    if (isMobile()) closeSidebar();
-  });
 
   // Model selector
   document.getElementById('model-select').addEventListener('change', (e) => {
@@ -326,8 +334,14 @@ document.addEventListener('DOMContentLoaded', () => {
   WsClient.on('disconnected', () => { currentSessionId = null; });
 
   // Set initial sidebar state
+  const sidebar = document.getElementById('sidebar');
+  const hamburger = document.getElementById('show-sidebar-btn');
   if (isMobile()) {
-    document.getElementById('sidebar').classList.add('collapsed');
+    sidebar.classList.add('collapsed');
+    hamburger.style.display = 'flex';
+  } else {
+    sidebar.classList.remove('collapsed');
+    hamburger.style.display = 'none';
   }
 
   // Auto-reconnect
