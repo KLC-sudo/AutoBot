@@ -13,10 +13,62 @@ const path = require('path');
 const crypto = require('crypto');
 
 const SESSIONS_DIR = process.env.SESSIONS_DIR || path.join(__dirname, 'data', 'sessions');
+const ACTIVE_SESSION_FILE = path.join(SESSIONS_DIR, '.last_active.json');
 
 // ─── Ensure sessions directory exists ─────────────────────────────
 async function init() {
   await fsp.mkdir(SESSIONS_DIR, { recursive: true });
+  // Ensure the active session tracker file exists
+  try {
+    await fsp.access(ACTIVE_SESSION_FILE);
+  } catch {
+    await fsp.writeFile(ACTIVE_SESSION_FILE, '{}', 'utf8');
+  }
+}
+
+// ─── Track last active session ────────────────────────────────────
+// Persists which session was last used so reconnections can resume.
+async function setActiveSession(sessionId) {
+  try {
+    const data = { sessionId, updatedAt: Date.now() };
+    await fsp.writeFile(ACTIVE_SESSION_FILE, JSON.stringify(data), 'utf8');
+  } catch (err) {
+    console.error('[Sessions] Failed to set active session:', err.message);
+  }
+}
+
+async function getActiveSessionId() {
+  try {
+    const data = await fsp.readFile(ACTIVE_SESSION_FILE, 'utf8');
+    const parsed = JSON.parse(data);
+    return parsed.sessionId || null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Get most recently updated session from disk ──────────────────
+async function getMostRecentSession() {
+  try {
+    const files = await fsp.readdir(SESSIONS_DIR);
+    let newest = null;
+    let newestTime = 0;
+
+    for (const file of files) {
+      if (!file.endsWith('.json') || file.startsWith('.')) continue;
+      try {
+        const data = await fsp.readFile(path.join(SESSIONS_DIR, file), 'utf8');
+        const session = JSON.parse(data);
+        if (session.updatedAt > newestTime) {
+          newestTime = session.updatedAt;
+          newest = session;
+        }
+      } catch { /* skip corrupted */ }
+    }
+    return newest;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Model context lengths (tokens) ──────────────────────────────
@@ -80,6 +132,8 @@ async function saveSession(session) {
   session.updatedAt = Date.now();
   const filePath = path.join(SESSIONS_DIR, `${session.id}.json`);
   await fsp.writeFile(filePath, JSON.stringify(session, null, 2), 'utf8');
+  // Track this as the most recently active session
+  await setActiveSession(session.id);
   return session;
 }
 
@@ -196,5 +250,8 @@ module.exports = {
   getSessionStats,
   getContextLength,
   estimateTokens,
+  setActiveSession,
+  getActiveSessionId,
+  getMostRecentSession,
   MODEL_CONTEXT_LENGTHS,
 };

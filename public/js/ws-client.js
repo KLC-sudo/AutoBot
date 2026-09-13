@@ -51,7 +51,13 @@ const WsClient = (() => {
 
     ws.onopen = () => {
       console.log('[WS] Socket open, sending auth...');
-      _send({ type: 'auth', token: _token });
+      // Include sessionId if we have one (for session resume after reconnect)
+      const authPayload = { type: 'auth', token: _token };
+      const savedSessionId = Auth.getSessionId();
+      if (savedSessionId) {
+        authPayload.sessionId = savedSessionId;
+      }
+      _send(authPayload);
     };
 
     ws.onmessage = (event) => {
@@ -112,6 +118,10 @@ const WsClient = (() => {
         Auth.setToken(_token);
         updateConnectionStatus('online');
         showDashboard();
+        // On reconnect (not first login), clear terminal so replay doesn't duplicate
+        if (reconnectAttempts > 0) {
+          Terminal.clear();
+        }
         Terminal.addSystem(packet.message);
         // Request session list and models after auth (also on reconnect)
         setTimeout(() => {
