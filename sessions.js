@@ -12,7 +12,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-const SESSIONS_DIR = path.join(__dirname, 'sessions');
+const SESSIONS_DIR = process.env.SESSIONS_DIR || path.join(__dirname, 'data', 'sessions');
 
 // ─── Ensure sessions directory exists ─────────────────────────────
 async function init() {

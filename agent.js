@@ -15,6 +15,23 @@ const { execSync } = require('child_process');
 const { getContextLength, estimateTokens } = require('./sessions');
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODELS_API = 'https://openrouter.ai/api/v1/models';
+
+// ─── Fetch actual context length from OpenRouter ───────────────────
+async function fetchContextLength(model, apiKey) {
+  try {
+    const res = await fetch(OPENROUTER_MODELS_API, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return getContextLength(model);
+    const data = await res.json();
+    const modelData = data.data?.find(m => m.id === model);
+    if (modelData?.context_length) return modelData.context_length;
+    return getContextLength(model);
+  } catch {
+    return getContextLength(model);
+  }
+}
 
 const SYSTEM_PROMPT = `You are Hermes, an expert full-stack coding agent. Your name is Hermes. You are NOT Claude, GPT, or any other AI assistant. You are Hermes — a specialized coding agent built to write, edit, and debug code autonomously.
 
@@ -240,7 +257,7 @@ async function runAgent(userMessage, session, callbacks, workdir) {
     { role: 'user', content: userMessage },
   ];
 
-  const contextLength = getContextLength(model);
+  const contextLength = await fetchContextLength(model, apiKey);
   const MAX_ITERATIONS = 15;
   let iteration = 0;
   let totalUsage = { prompt: 0, completion: 0, total: 0 };

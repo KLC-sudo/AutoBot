@@ -237,7 +237,7 @@ async function handleCommand(ws, conn, payload) {
   if (command.length > 10000) return sendFrame(ws, 'error', { message: 'Command too long (max 10000 chars).' });
 
   conn.processing = true;
-  const workdir = process.env.WORKDIR || path.join(__dirname, 'workspace');
+  const workdir = process.env.WORKDIR || path.join(__dirname, 'data', 'workspace');
 
   console.log(`[CMD] ${conn.id}: ${command}`);
 
