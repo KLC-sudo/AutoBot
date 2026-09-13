@@ -23,12 +23,39 @@ async function fetchContextLength(model, apiKey) {
     const res = await fetch(OPENROUTER_MODELS_API, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
-    if (!res.ok) return getContextLength(model);
+    if (!res.ok) {
+      console.log(`[Agent] OpenRouter models API returned ${res.status}`);
+      return getContextLength(model);
+    }
     const data = await res.json();
-    const modelData = data.data?.find(m => m.id === model);
-    if (modelData?.context_length) return modelData.context_length;
+
+    // Try exact match first
+    let modelData = data.data?.find(m => m.id === model);
+
+    // Try case-insensitive match
+    if (!modelData) {
+      const lower = model.toLowerCase();
+      modelData = data.data?.find(m => m.id.toLowerCase() === lower);
+    }
+
+    // Try partial match (e.g. "mimo-v2.5" matches "xiaomi/mimo-v2.5")
+    if (!modelData) {
+      const searchParts = model.toLowerCase().split('/').pop().split('-');
+      modelData = data.data?.find(m => {
+        const id = m.id.toLowerCase();
+        return searchParts.every(part => id.includes(part));
+      });
+    }
+
+    if (modelData?.context_length) {
+      console.log(`[Agent] Fetched context length for ${model}: ${modelData.context_length}`);
+      return modelData.context_length;
+    }
+
+    console.log(`[Agent] Model ${model} not found in OpenRouter, using fallback`);
     return getContextLength(model);
-  } catch {
+  } catch (err) {
+    console.log(`[Agent] Failed to fetch models: ${err.message}`);
     return getContextLength(model);
   }
 }
@@ -129,6 +156,36 @@ const TOOLS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'clone_repo',
+      description: 'Clone a GitHub repository into the workspace',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'GitHub repo URL (https://github.com/user/repo)' },
+          target_dir: { type: 'string', description: 'Directory name to clone into (optional)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'install_deps',
+      description: 'Install npm/yarn/pip dependencies in a directory',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory with package.json or requirements.txt' },
+          manager: { type: 'string', description: 'Package manager: npm, yarn, pip (default: npm)' },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 // ─── Tool Execution ───────────────────────────────────────────────
@@ -199,14 +256,42 @@ async function executeTool(name, args, workdir) {
           ? (path.isAbsolute(args.cwd) ? args.cwd : path.join(workdir, args.cwd))
           : workdir;
 
-        const output = execSync(args.command, {
-          cwd: cmdCwd,
-          encoding: 'utf8',
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
-          shell: true,
-        });
-        return { success: true, content: output.trim() || '(no output)' };
+        // Try multiple shells for Railway compatibility
+        const shells = ['/bin/bash', '/bin/sh', 'bash', 'sh'];
+        let lastError = null;
+
+        for (const shell of shells) {
+          try {
+            const output = execSync(args.command, {
+              cwd: cmdCwd,
+              encoding: 'utf8',
+              timeout: 60000,
+              maxBuffer: 1024 * 1024,
+              shell,
+            });
+            return { success: true, content: output.trim() || '(no output)' };
+          } catch (e) {
+            lastError = e;
+            continue;
+          }
+        }
+
+        // All shells failed - try without shell
+        try {
+          const output = execSync(args.command, {
+            cwd: cmdCwd,
+            encoding: 'utf8',
+            timeout: 60000,
+            maxBuffer: 1024 * 1024,
+          });
+          return { success: true, content: output.trim() || '(no output)' };
+        } catch (e) {
+          return {
+            success: false,
+            content: e.stdout || '',
+            error: e.stderr || e.message,
+          };
+        }
       } catch (err) {
         return {
           success: false,
@@ -225,6 +310,51 @@ async function executeTool(name, args, workdir) {
         content = content.replace(args.find, args.replace);
         await fsp.writeFile(fullPath, content, 'utf8');
         return { success: true, message: `Edited ${args.path}` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'clone_repo': {
+      try {
+        const targetDir = args.target_dir || path.basename(args.url, '.git');
+        const clonePath = path.join(workdir, targetDir);
+        execSync(`git clone ${args.url} ${clonePath}`, {
+          encoding: 'utf8',
+          timeout: 120000,
+          shell: '/bin/bash',
+        });
+        return { success: true, content: `Cloned to ${targetDir}/` };
+      } catch (err) {
+        // Try with /bin/sh as fallback
+        try {
+          const targetDir = args.target_dir || path.basename(args.url, '.git');
+          const clonePath = path.join(workdir, targetDir);
+          execSync(`git clone ${args.url} ${clonePath}`, {
+            encoding: 'utf8',
+            timeout: 120000,
+            shell: '/bin/sh',
+          });
+          return { success: true, content: `Cloned to ${targetDir}/` };
+        } catch (e) {
+          return { success: false, error: `git clone failed: ${e.message}. Git may not be installed in this container.` };
+        }
+      }
+    }
+
+    case 'install_deps': {
+      try {
+        const depPath = args.path ? path.join(workdir, args.path) : workdir;
+        const mgr = args.manager || 'npm';
+        const cmd = mgr === 'pip' ? 'pip install -r requirements.txt' : `${mgr} install`;
+        const output = execSync(cmd, {
+          cwd: depPath,
+          encoding: 'utf8',
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+          shell: '/bin/bash',
+        });
+        return { success: true, content: output.trim() || 'Dependencies installed' };
       } catch (err) {
         return { success: false, error: err.message };
       }

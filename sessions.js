@@ -36,10 +36,10 @@ const MODEL_CONTEXT_LENGTHS = {
   'mistralai/mixtral-8x7b-instruct': 32768,
   'deepseek/deepseek-chat': 65536,
   'deepseek/deepseek-r1': 65536,
-  'xiaomi/mimo-v2.5': 158000,
-  'xiaomi/mimo-v2': 158000,
-  'MiMo-V2.5': 158000,
-  'Xiaomi V2.5': 158000,
+  'xiaomi/mimo-v2.5': 1100000,
+  'xiaomi/mimo-v2': 1100000,
+  'MiMo-V2.5': 1100000,
+  'Xiaomi V2.5': 1100000,
 };
 
 function getContextLength(model) {
@@ -53,7 +53,7 @@ function getContextLength(model) {
   // Check for common patterns
   if (lower.includes('claude') && lower.includes('3')) return 200000;
   if (lower.includes('gemini') && lower.includes('1.5')) return 2000000;
-  if (lower.includes('mimo')) return 158000;
+  if (lower.includes('mimo')) return 1100000;
   return 128000; // safe default
 }
 
