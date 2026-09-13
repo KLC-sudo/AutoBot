@@ -64,13 +64,21 @@
 2. Flex items (`.panel-terminal`, `.terminal-stream`) lacked `height: 0` to force proper flex sizing
 3. Missing `-webkit-fill-available` fallback for iOS Safari
 4. Missing `viewport-fit=cover` meta tag (required for `env(safe-area-inset-*)` to work)
+5. **Android Go Edition uses older Chrome/WebView (often <108) where `100dvh` is NOT supported**
 
-**Fixes Applied (`styles.css` + `index.html`):**
+**Fixes Applied (`styles.css`, `index.html`, `app.js`):**
 1. Added `-webkit-fill-available` and `100dvh` fallbacks for accurate viewport height
 2. Changed `.panel-terminal` and `.terminal-stream` from `flex: 1` to `flex: 1 1 0` with `height: 0` — forces flex items to respect their computed bounds
 3. Added `viewport-fit=cover` to `<meta name="viewport">`
 4. Added `panel-terminal` safe-area padding for notch devices
 5. Fixed 480px breakpoint sidebar `transform` to prevent ghost hit areas
+6. **Added JS-based viewport height detection** — `window.innerHeight` provides the real viewport height on Android Go where CSS viewport units fail
+7. Added `--app-height` CSS custom property set via JS, used as primary fallback in CSS
+8. Added `touch-action: manipulation` to inputs/buttons (prevents double-tap zoom on Android Go)
+9. Added `overscroll-behavior: none` (prevents pull-to-refresh interference)
+10. Added `-webkit-tap-highlight-color: transparent` globally
+11. Added `mobile-web-app-capable` and Apple meta tags
+12. Added `-webkit-transform: translateZ(0)` to sidebar backdrop for GPU acceleration on low-end devices
 
 ---
 
@@ -123,6 +131,30 @@ tests/
 - **Keyboard shortcuts:** No shortcut to create new session or toggle code panel
 - **Dark mode toggle:** Currently dark-only, could add light theme option
 - **Mobile code viewer:** Currently hidden on mobile (`display: none`), could show as modal or swipeable panel
+
+---
+
+## Android Go Edition — Known Limitations
+
+**Device:** Android 13 Go Edition (budget devices with ≤2GB RAM)
+**Browser:** Chrome for Android Go (typically older version, may not receive latest updates)
+
+### Web Rendering Issues Documented
+| Issue | Description | Impact |
+|-------|-------------|--------|
+| CSS `100dvh` not supported | Chrome <108 doesn't support dynamic viewport units | Viewport height includes browser chrome, content pushed off-screen |
+| Aggressive disk cache | `Cache-Control` headers often ignored | Stale CSS/JS served after deployment |
+| PWA downloads broken | `beforeinstallprompt` event never fires | Cannot install as app |
+| WebView caching layer | Some Android Go browsers have extra caching | Service workers may not clear cache properly |
+| Limited RAM | ≤2GB RAM, aggressive tab killing | WebSocket connections may drop when tab is backgrounded |
+| Older Chromium engine | May lack `gap` property, `container queries` | CSS features fail silently |
+
+### Mitigation Strategies Used
+1. **JS viewport detection** (`window.innerHeight`) as fallback for `100dvh`
+2. **Touch action management** (`manipulation`) to prevent zoom issues
+3. **Overscroll prevention** (`overscroll-behavior: none`) to avoid pull-to-refresh
+4. **GPU acceleration hints** (`translateZ(0)`) for smooth animations on low-end hardware
+5. **Content-hash filenames** (planned) to bypass aggressive caching
 
 ---
 
