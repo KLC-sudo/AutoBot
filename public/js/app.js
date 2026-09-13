@@ -7,6 +7,16 @@
 let currentSessionId = null;
 let availableModels = [];
 
+/* ─── Mobile Viewport Fix ──────────────────────────────────────── */
+// Android Go Edition (and older Android Chrome) doesn't support 100dvh.
+// window.innerHeight gives the real viewport height excluding browser chrome.
+function fixMobileViewport() {
+  if (!('ontouchstart' in window) && window.innerWidth > 768) return;
+  const vh = window.innerHeight * 0.01;
+  document.documentElement.style.setProperty('--vh', `${vh}px`);
+  document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+}
+
 /* ─── Command History ───────────────────────────────────────────── */
 const CommandHistory = (() => {
   const MAX_HISTORY = 100;
@@ -307,6 +317,13 @@ document.addEventListener('keydown', (e) => {
 
 /* ─── Init ──────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
+  // Fix mobile viewport height (critical for Android Go Edition)
+  fixMobileViewport();
+  window.addEventListener('resize', fixMobileViewport);
+  window.addEventListener('orientationchange', () => {
+    setTimeout(fixMobileViewport, 100);
+  });
+
   // Wire up UI elements
   document.getElementById('login-form').addEventListener('submit', handleLogin);
   document.getElementById('cmd-form').addEventListener('submit', dispatchCommand);
