@@ -381,13 +381,19 @@ html, body {
    RESPONSIVE
    ═══════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  html, body { height: 100%; overflow: hidden; }
+  html, body {
+    height: 100%;
+    height: 100dvh;
+    height: -webkit-fill-available;
+    overflow: hidden;
+  }
 
   .dashboard {
     display: flex;
     flex-direction: column;
-    height: 100dvh;
     height: 100vh;
+    height: 100dvh;
+    height: -webkit-fill-available;
     overflow: hidden;
   }
 
@@ -407,7 +413,8 @@ html, body {
     border-right: none;
     border-bottom: none;
     width: 100%;
-    flex: 1;
+    flex: 1 1 0;
+    height: 0;
     min-height: 0;
     overflow: hidden;
   }
@@ -438,7 +445,8 @@ html, body {
   .model-select { max-width: 110px; font-size: 10px; padding: 3px 6px; }
 
   .terminal-stream {
-    flex: 1;
+    flex: 1 1 0;
+    height: 0;
     overflow-y: auto;
     padding: 12px;
     min-height: 0;
@@ -468,10 +476,11 @@ html, body {
   .input-command { font-size: 13px; padding: 8px 10px; }
   .btn-send { width: 40px; height: 40px; }
   .sidebar { width: 85vw; min-width: 85vw; }
-  .sidebar.collapsed { width: 85vw; min-width: 85vw; }
+  .sidebar.collapsed { width: 85vw; min-width: 85vw; transform: translateX(-100%); }
 }
 
 /* Safe area for notch phones */
 @supports (padding: max(0px)) {
   .input-bar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .panel-terminal { padding-bottom: env(safe-area-inset-bottom); }
 }

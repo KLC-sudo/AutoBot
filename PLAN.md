@@ -56,6 +56,74 @@
 - Investigate Railway's CDN caching behavior
 - Consider deploying to a different platform to isolate the issue
 
+### RESOLVED: Mobile UI Responsiveness (FIX 2026-09-14)
+**Symptom:** On real mobile devices, the main content area appeared blank — only the input bar was visible. Chat messages, panel header, and sidebar toggle were either hidden or pushed off-screen.
+
+**Root Causes:**
+1. `100vh` on mobile includes browser chrome (address bar, bottom bar), pushing content off-screen
+2. Flex items (`.panel-terminal`, `.terminal-stream`) lacked `height: 0` to force proper flex sizing
+3. Missing `-webkit-fill-available` fallback for iOS Safari
+4. Missing `viewport-fit=cover` meta tag (required for `env(safe-area-inset-*)` to work)
+
+**Fixes Applied (`styles.css` + `index.html`):**
+1. Added `-webkit-fill-available` and `100dvh` fallbacks for accurate viewport height
+2. Changed `.panel-terminal` and `.terminal-stream` from `flex: 1` to `flex: 1 1 0` with `height: 0` — forces flex items to respect their computed bounds
+3. Added `viewport-fit=cover` to `<meta name="viewport">`
+4. Added `panel-terminal` safe-area padding for notch devices
+5. Fixed 480px breakpoint sidebar `transform` to prevent ghost hit areas
+
+---
+
+## Pending Features & Improvements
+
+### Testing Infrastructure (NOT STARTED)
+**Priority:** High
+
+**Current State:** Zero tests exist. No test framework, no test files, no CI/CD.
+
+**Proposed Strategy:**
+
+| Layer | Tool | Coverage |
+|-------|------|----------|
+| Backend unit tests | Jest + supertest | `agent.js` (tool execution), `sessions.js` (CRUD), WebSocket message routing |
+| Frontend unit tests | Vitest | `CommandHistory`, `CodeViewer`, `Terminal` rendering, `Auth` token flow |
+| E2E tests | Playwright | Login flow, session create/load/switch, mobile viewport rendering, sidebar toggle |
+| Visual regression | Percy or Chromatic | Capture screenshots at 375px, 768px, 1024px, 1440px — detect layout drift |
+
+**Test File Structure (proposed):**
+```
+tests/
+├── backend/
+│   ├── agent.test.js
+│   ├── sessions.test.js
+│   └── server.test.js
+├── frontend/
+│   ├── app.test.js
+│   ├── terminal.test.js
+│   └── auth.test.js
+├── e2e/
+│   ├── login.spec.js
+│   ├── sessions.spec.js
+│   └── mobile.spec.js
+└── visual/
+    └── regression.spec.js
+```
+
+**Action Items:**
+- [ ] Add Jest + supertest to devDependencies
+- [ ] Write backend unit tests for `sessions.js` CRUD operations
+- [ ] Write backend unit tests for `agent.js` tool dispatch
+- [ ] Add Playwright for E2E testing
+- [ ] Write mobile viewport E2E test (verify terminal-stream renders at 375px)
+- [ ] Set up CI pipeline (GitHub Actions) to run tests on push/PR
+
+### Additional Improvement Areas
+- **Error handling:** Agent `run_command` output truncation (currently returns full output)
+- **Session search/filter:** No way to search through sessions by name or content
+- **Keyboard shortcuts:** No shortcut to create new session or toggle code panel
+- **Dark mode toggle:** Currently dark-only, could add light theme option
+- **Mobile code viewer:** Currently hidden on mobile (`display: none`), could show as modal or swipeable panel
+
 ---
 
 ## File Structure
