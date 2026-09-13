@@ -172,9 +172,8 @@ wss.on('connection', (ws, request) => {
       sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
 
       // ── Session Resume Logic ──
-      // 1. Client may send a sessionId to resume
-      // 2. Otherwise, try the last active session from disk
-      // 3. Only create a new session if nothing can be resumed
+      // Client sends a sessionId to resume (from sessionStorage, per-tab).
+      // If none sent, start a fresh session.
       const requestedSessionId = payload.sessionId;
       let resumed = false;
 
@@ -195,50 +194,7 @@ wss.on('connection', (ws, request) => {
           resumed = true;
           console.log(`[WS] Authenticated: ${connectionId} — resumed session ${requestedSessionId}`);
         } else {
-          console.log(`[WS] Requested session ${requestedSessionId} not found, trying last active...`);
-        }
-      }
-
-      if (!resumed) {
-        const lastActiveId = await sessions.getActiveSessionId();
-        if (lastActiveId) {
-          const loaded = await sessions.loadSession(lastActiveId);
-          if (loaded) {
-            conn.session = loaded;
-            sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-            sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready. Session restored.', connectionId });
-            // Replay conversation history to client
-            for (const msg of loaded.messages) {
-              if (msg.role === 'user') {
-                sendFrame(ws, 'history', { role: 'user', content: msg.content });
-              } else if (msg.role === 'assistant' && msg.content) {
-                sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
-              }
-            }
-            resumed = true;
-            console.log(`[WS] Authenticated: ${connectionId} — restored last active session ${lastActiveId}`);
-          }
-        }
-      }
-
-      if (!resumed) {
-        // Fall back to most recent session on disk, or create new
-        const recent = await sessions.getMostRecentSession();
-        if (recent) {
-          conn.session = recent;
-          await sessions.saveSession(recent); // touch updatedAt to mark active
-          sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-          sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready. Previous session restored.', connectionId });
-          // Replay conversation history to client
-          for (const msg of recent.messages) {
-            if (msg.role === 'user') {
-              sendFrame(ws, 'history', { role: 'user', content: msg.content });
-            } else if (msg.role === 'assistant' && msg.content) {
-              sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
-            }
-          }
-          resumed = true;
-          console.log(`[WS] Authenticated: ${connectionId} — restored most recent session ${recent.id}`);
+          console.log(`[WS] Requested session ${requestedSessionId} not found, creating new...`);
         }
       }
 
