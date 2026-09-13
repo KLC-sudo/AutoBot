@@ -11,8 +11,27 @@
 
 const fsp = require('fs/promises');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec: execAsync } = require('child_process');
 const { getContextLength, estimateTokens } = require('./sessions');
+
+// ─── Find available shell ──────────────────────────────────────────
+function findShell() {
+  const fs = require('fs');
+  const shells = ['/bin/bash', '/bin/sh', '/usr/bin/bash', '/usr/bin/sh', 'bash', 'sh'];
+  for (const shell of shells) {
+    try {
+      execSync(`"${shell}" -c "echo ok"`, { encoding: 'utf8', timeout: 5000 });
+      return shell;
+    } catch { continue; }
+  }
+  return '/bin/sh'; // fallback
+}
+
+let CACHED_SHELL = null;
+function getShell() {
+  if (!CACHED_SHELL) CACHED_SHELL = findShell();
+  return CACHED_SHELL;
+}
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODELS_API = 'https://openrouter.ai/api/v1/models';
@@ -287,42 +306,18 @@ async function executeTool(name, args, workdir) {
           ? (path.isAbsolute(args.cwd) ? args.cwd : path.join(workdir, args.cwd))
           : workdir;
 
-        // Try multiple shells for Railway compatibility
-        const shells = ['/bin/bash', '/bin/sh', 'bash', 'sh'];
-        let lastError = null;
+        const shell = getShell();
+        console.log(`[Agent] Running command with shell: ${shell}`);
 
-        for (const shell of shells) {
-          try {
-            const output = execSync(args.command, {
-              cwd: cmdCwd,
-              encoding: 'utf8',
-              timeout: 60000,
-              maxBuffer: 1024 * 1024,
-              shell,
-            });
-            return { success: true, content: output.trim() || '(no output)' };
-          } catch (e) {
-            lastError = e;
-            continue;
-          }
-        }
-
-        // All shells failed - try without shell
-        try {
-          const output = execSync(args.command, {
-            cwd: cmdCwd,
-            encoding: 'utf8',
-            timeout: 60000,
-            maxBuffer: 1024 * 1024,
-          });
-          return { success: true, content: output.trim() || '(no output)' };
-        } catch (e) {
-          return {
-            success: false,
-            content: e.stdout || '',
-            error: e.stderr || e.message,
-          };
-        }
+        const output = execSync(args.command, {
+          cwd: cmdCwd,
+          encoding: 'utf8',
+          timeout: 60000,
+          maxBuffer: 2 * 1024 * 1024,
+          shell,
+          env: { ...process.env, PATH: process.env.PATH },
+        });
+        return { success: true, content: output.trim() || '(no output)' };
       } catch (err) {
         return {
           success: false,
@@ -358,30 +353,15 @@ async function executeTool(name, args, workdir) {
           cloneUrl = cloneUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
         }
 
+        const shell = getShell();
         execSync(`git clone ${cloneUrl} "${clonePath}"`, {
           encoding: 'utf8',
           timeout: 120000,
-          shell: '/bin/bash',
+          shell,
         });
         return { success: true, content: `Cloned to ${targetDir}/` };
       } catch (err) {
-        try {
-          const targetDir = args.target_dir || path.basename(args.url.replace(/\.git$/, ''), '.git');
-          const clonePath = path.join(workdir, targetDir);
-          let cloneUrl = args.url;
-          const githubToken = process.env.GITHUB_TOKEN;
-          if (githubToken && cloneUrl.includes('github.com')) {
-            cloneUrl = cloneUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
-          }
-          execSync(`git clone ${cloneUrl} "${clonePath}"`, {
-            encoding: 'utf8',
-            timeout: 120000,
-            shell: '/bin/sh',
-          });
-          return { success: true, content: `Cloned to ${targetDir}/` };
-        } catch (e) {
-          return { success: false, error: `git clone failed: ${e.message}` };
-        }
+        return { success: false, error: `git clone failed: ${err.message}` };
       }
     }
 
@@ -390,41 +370,42 @@ async function executeTool(name, args, workdir) {
         const repoPath = args.path ? path.join(workdir, args.path) : workdir;
         const branch = args.branch || 'main';
         const message = args.message || 'Update via Hermes Agent';
+        const shell = getShell();
 
         // Configure git
-        const githubToken = process.env.GITHUB_TOKEN;
         const githubUser = process.env.GITHUB_USER || 'Hermes Agent';
 
-        execSync(`git config user.name "${githubUser}"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
-        execSync(`git config user.email "hermes@agent.local"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+        execSync(`git config user.name "${githubUser}"`, { cwd: repoPath, encoding: 'utf8', shell });
+        execSync(`git config user.email "hermes@agent.local"`, { cwd: repoPath, encoding: 'utf8', shell });
 
         // Stage all changes
-        execSync(`git add -A`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+        execSync(`git add -A`, { cwd: repoPath, encoding: 'utf8', shell });
 
         // Check if there are changes to commit
         try {
-          execSync(`git diff --cached --quiet`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+          execSync(`git diff --cached --quiet`, { cwd: repoPath, encoding: 'utf8', shell });
           return { success: true, content: 'No changes to commit' };
         } catch {
           // There are changes (exit code 1 means changes exist)
         }
 
         // Commit
-        execSync(`git commit -m "${message}"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+        execSync(`git commit -m "${message}"`, { cwd: repoPath, encoding: 'utf8', shell });
 
         // Inject token into remote URL for push
+        const githubToken = process.env.GITHUB_TOKEN;
         if (githubToken) {
           try {
-            const remoteUrl = execSync(`git remote get-url origin`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' }).trim();
+            const remoteUrl = execSync(`git remote get-url origin`, { cwd: repoPath, encoding: 'utf8', shell }).trim();
             if (remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
               const authUrl = remoteUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
-              execSync(`git remote set-url origin ${authUrl}`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+              execSync(`git remote set-url origin ${authUrl}`, { cwd: repoPath, encoding: 'utf8', shell });
             }
           } catch { /* ignore */ }
         }
 
         // Push
-        execSync(`git push origin ${branch}`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash', timeout: 60000 });
+        execSync(`git push origin ${branch}`, { cwd: repoPath, encoding: 'utf8', shell, timeout: 60000 });
 
         return { success: true, content: `Pushed to origin/${branch}` };
       } catch (err) {
@@ -437,12 +418,13 @@ async function executeTool(name, args, workdir) {
         const depPath = args.path ? path.join(workdir, args.path) : workdir;
         const mgr = args.manager || 'npm';
         const cmd = mgr === 'pip' ? 'pip install -r requirements.txt' : `${mgr} install`;
+        const shell = getShell();
         const output = execSync(cmd, {
           cwd: depPath,
           encoding: 'utf8',
           timeout: 120000,
           maxBuffer: 2 * 1024 * 1024,
-          shell: '/bin/bash',
+          shell,
         });
         return { success: true, content: output.trim() || 'Dependencies installed' };
       } catch (err) {
