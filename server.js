@@ -347,7 +347,10 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ─── Start ──────────────────────────────────────────────────────────
-sessions.init().then(() => {
+sessions.init().then(async () => {
+  // Clean up empty sessions on startup
+  await sessions.cleanupEmptySessions();
+
   server.listen(PORT, () => {
     console.log(`\n🚀 Hermes Web UI Gateway`);
     console.log(`   Port:      ${PORT}`);

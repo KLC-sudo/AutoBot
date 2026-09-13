@@ -113,6 +113,14 @@ async function listSessions() {
     try {
       const data = await fsp.readFile(path.join(SESSIONS_DIR, file), 'utf8');
       const session = JSON.parse(data);
+
+      // Auto-delete empty sessions (0 messages, older than 5 minutes)
+      if (session.messages.length === 0 && Date.now() - session.createdAt > 5 * 60 * 1000) {
+        console.log(`[Sessions] Cleaning up empty session: ${session.id}`);
+        await fsp.unlink(path.join(SESSIONS_DIR, file)).catch(() => {});
+        continue;
+      }
+
       sessions.push({
         id: session.id,
         name: session.name,
@@ -126,6 +134,30 @@ async function listSessions() {
   }
 
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+// ─── Cleanup all empty sessions (called on startup) ────────────────
+async function cleanupEmptySessions() {
+  await init();
+  const files = await fsp.readdir(SESSIONS_DIR);
+  let cleaned = 0;
+
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    try {
+      const data = await fsp.readFile(path.join(SESSIONS_DIR, file), 'utf8');
+      const session = JSON.parse(data);
+      if (session.messages.length === 0) {
+        await fsp.unlink(path.join(SESSIONS_DIR, file)).catch(() => {});
+        cleaned++;
+      }
+    } catch { /* skip corrupted */ }
+  }
+
+  if (cleaned > 0) {
+    console.log(`[Sessions] Cleaned up ${cleaned} empty sessions`);
+  }
+  return cleaned;
 }
 
 // ─── Token estimation (rough: 1 token ≈ 4 chars) ────────────────
@@ -160,6 +192,7 @@ module.exports = {
   loadSession,
   deleteSession,
   listSessions,
+  cleanupEmptySessions,
   getSessionStats,
   getContextLength,
   estimateTokens,
