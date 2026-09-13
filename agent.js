@@ -64,8 +64,22 @@ const SYSTEM_PROMPT = `You are Hermes, an expert full-stack coding agent. Your n
 
 IMPORTANT: Always refer to yourself as "Hermes" or "I". Never say "As Claude..." or "As an AI..." or "As GPT...". You are Hermes.
 
-## Capabilities
-You have access to tools that let you interact with the filesystem and execute commands.
+## Available Tools
+You have full access to the workspace filesystem and shell. Your tools:
+- **read_file** — Read any file's contents
+- **write_file** — Create or overwrite files
+- **edit_file** — Find and replace text in files
+- **list_files** — List directory contents
+- **run_command** — Execute any shell command (git, npm, node, python, curl, etc.)
+- **clone_repo** — Clone a GitHub repo (private repos supported via stored token)
+- **git_push** — Stage, commit, and push changes to GitHub
+- **install_deps** — Install npm/yarn/pip dependencies
+
+## GitHub Access
+You have a GitHub token configured. You can:
+- Clone any repo (public or private): clone_repo("https://github.com/user/repo")
+- Push changes: git_push({ message: "your commit message" })
+- Run any git command: run_command("git status")
 
 ## Rules
 - Always use tools to read files before editing them.
@@ -74,6 +88,7 @@ You have access to tools that let you interact with the filesystem and execute c
 - Be concise in your text responses — explain what you did, not what you're about to do.
 - If a task requires multiple steps, execute them one by one.
 - When you're done, give a brief summary of what you did.
+- If git clone fails, check if git is installed and try alternative approaches.
 
 ## Working Directory
 You are working in: {WORKDIR}
@@ -168,6 +183,22 @@ const TOOLS = [
           target_dir: { type: 'string', description: 'Directory name to clone into (optional)' },
         },
         required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_push',
+      description: 'Stage, commit, and push all changes to GitHub',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Repo directory path (optional, defaults to workspace root)' },
+          message: { type: 'string', description: 'Commit message' },
+          branch: { type: 'string', description: 'Branch to push to (default: main)' },
+        },
+        required: [],
       },
     },
   },
@@ -317,28 +348,87 @@ async function executeTool(name, args, workdir) {
 
     case 'clone_repo': {
       try {
-        const targetDir = args.target_dir || path.basename(args.url, '.git');
+        const targetDir = args.target_dir || path.basename(args.url.replace(/\.git$/, ''), '.git');
         const clonePath = path.join(workdir, targetDir);
-        execSync(`git clone ${args.url} ${clonePath}`, {
+
+        // Inject GitHub token for private repos
+        let cloneUrl = args.url;
+        const githubToken = process.env.GITHUB_TOKEN;
+        if (githubToken && cloneUrl.includes('github.com')) {
+          cloneUrl = cloneUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
+        }
+
+        execSync(`git clone ${cloneUrl} "${clonePath}"`, {
           encoding: 'utf8',
           timeout: 120000,
           shell: '/bin/bash',
         });
         return { success: true, content: `Cloned to ${targetDir}/` };
       } catch (err) {
-        // Try with /bin/sh as fallback
         try {
-          const targetDir = args.target_dir || path.basename(args.url, '.git');
+          const targetDir = args.target_dir || path.basename(args.url.replace(/\.git$/, ''), '.git');
           const clonePath = path.join(workdir, targetDir);
-          execSync(`git clone ${args.url} ${clonePath}`, {
+          let cloneUrl = args.url;
+          const githubToken = process.env.GITHUB_TOKEN;
+          if (githubToken && cloneUrl.includes('github.com')) {
+            cloneUrl = cloneUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
+          }
+          execSync(`git clone ${cloneUrl} "${clonePath}"`, {
             encoding: 'utf8',
             timeout: 120000,
             shell: '/bin/sh',
           });
           return { success: true, content: `Cloned to ${targetDir}/` };
         } catch (e) {
-          return { success: false, error: `git clone failed: ${e.message}. Git may not be installed in this container.` };
+          return { success: false, error: `git clone failed: ${e.message}` };
         }
+      }
+    }
+
+    case 'git_push': {
+      try {
+        const repoPath = args.path ? path.join(workdir, args.path) : workdir;
+        const branch = args.branch || 'main';
+        const message = args.message || 'Update via Hermes Agent';
+
+        // Configure git
+        const githubToken = process.env.GITHUB_TOKEN;
+        const githubUser = process.env.GITHUB_USER || 'Hermes Agent';
+
+        execSync(`git config user.name "${githubUser}"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+        execSync(`git config user.email "hermes@agent.local"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+
+        // Stage all changes
+        execSync(`git add -A`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+
+        // Check if there are changes to commit
+        try {
+          execSync(`git diff --cached --quiet`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+          return { success: true, content: 'No changes to commit' };
+        } catch {
+          // There are changes (exit code 1 means changes exist)
+        }
+
+        // Commit
+        execSync(`git commit -m "${message}"`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+
+        // Inject token into remote URL for push
+        if (githubToken) {
+          try {
+            const remoteUrl = execSync(`git remote get-url origin`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' }).trim();
+            if (remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
+              const authUrl = remoteUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
+              execSync(`git remote set-url origin ${authUrl}`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash' });
+            }
+          } catch { /* ignore */ }
+        }
+
+        // Push
+        execSync(`git push origin ${branch}`, { cwd: repoPath, encoding: 'utf8', shell: '/bin/bash', timeout: 60000 });
+
+        return { success: true, content: `Pushed to origin/${branch}` };
+      } catch (err) {
+        return { success: false, error: `git push failed: ${err.message}` };
       }
     }
 
