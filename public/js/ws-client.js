@@ -12,9 +12,8 @@ const WsClient = (() => {
   let _connectedAt = 0;
   let _authedAt = 0;
 
-  const MAX_RECONNECT_DELAY = 30000;
-  const BASE_RECONNECT_DELAY = 2000;
-  const SHORT_LIFETIME_MS = 5000;
+  const MAX_RECONNECT_DELAY = 10000;
+  const BASE_RECONNECT_DELAY = 1000;
 
   // Message handlers registry
   const _handlers = {};
@@ -78,10 +77,8 @@ const WsClient = (() => {
       try {
         packet = JSON.parse(event.data);
       } catch {
-        console.warn('[WS] Non-JSON message:', event.data);
         return;
       }
-
       _handlePacket(packet);
     };
 
@@ -92,18 +89,12 @@ const WsClient = (() => {
       _stopKeepalive();
 
       if (!_intentionalClose) {
-        if (!Auth.isAuthenticated()) {
-          setLoginLoading(false);
-          showLoginError('Connection lost. Please try again.');
-        }
         _emit('disconnected', { code: event.code });
         _scheduleReconnect();
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('[WS] Error:', err);
-    };
+    ws.onerror = () => {};
   }
 
   function _send(data) {
@@ -129,7 +120,6 @@ const WsClient = (() => {
     }
   }
 
-  // ─── Keepalive ping to prevent mobile browser idle kills ─────────
   function _startKeepalive() {
     _stopKeepalive();
     _keepaliveInterval = setInterval(() => {
@@ -147,10 +137,8 @@ const WsClient = (() => {
   }
 
   function _handlePacket(packet) {
-    // Emit to registered handlers
     _emit(packet.type, packet);
 
-    // Built-in handling
     switch (packet.type) {
       case 'auth_success':
         _authedAt = Date.now();
@@ -174,6 +162,10 @@ const WsClient = (() => {
         } else {
           Terminal.addError(packet.message);
         }
+        break;
+
+      case 'keepalive':
+        // Server keepalive — just ignore, its purpose is to keep the proxy alive
         break;
 
       case 'status':
@@ -218,49 +210,21 @@ const WsClient = (() => {
   function _scheduleReconnect() {
     reconnectAttempts++;
 
-    if (reconnectAttempts > 30) {
+    if (reconnectAttempts > 60) {
       console.error('[WS] Max reconnect attempts reached. Refreshing page...');
       location.reload();
       return;
     }
 
-    // If the connection died within 5 seconds (proxy killing it, server crash),
-    // use much longer delays to avoid spamming a broken server
-    const lifetime = _connectedAt ? (Date.now() - _connectedAt) : 999999;
-    const isShortLived = lifetime < SHORT_LIFETIME_MS;
+    // Reconnect fast — Railway kills connections every ~30s, this is expected
+    const delay = Math.min(BASE_RECONNECT_DELAY, MAX_RECONNECT_DELAY);
 
-    let delay;
-    if (isShortLived) {
-      // Short-lived connection: server is unstable, back off aggressively
-      delay = Math.min(5000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
-      console.log(`[WS] Short-lived connection (${Math.round(lifetime / 1000)}s). Backing off aggressively.`);
-    } else {
-      delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
-    }
-
-    console.log(`[WS] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})`);
-    showReconnectBanner(Math.round(delay / 1000));
+    console.log(`[WS] Reconnecting in ${delay / 1000}s (attempt ${reconnectAttempts})`);
+    // No banner — reconnection is expected and seamless
 
     reconnectTimer = setTimeout(() => {
-      hideReconnectBanner();
       _doConnect();
     }, delay);
-  }
-
-  function showReconnectBanner(seconds) {
-    let banner = document.getElementById('reconnect-banner');
-    if (!banner) {
-      banner = document.createElement('div');
-      banner.id = 'reconnect-banner';
-      banner.className = 'reconnect-banner';
-      document.body.appendChild(banner);
-    }
-    banner.textContent = `Connection lost. Reconnecting in ${seconds}s...`;
-  }
-
-  function hideReconnectBanner() {
-    const banner = document.getElementById('reconnect-banner');
-    if (banner) banner.remove();
   }
 
   function isConnected() {
