@@ -143,6 +143,7 @@ wss.on('connection', (ws, request) => {
   console.log(`[WS] Connected: ${connectionId}`);
 
   connections.set(ws, { id: connectionId, session: null, processing: false });
+  ws._isAlive = true; // Mark alive for heartbeat
 
   ws.on('message', async (raw) => {
     let payload;
@@ -168,17 +169,23 @@ wss.on('connection', (ws, request) => {
       clearTimeout(ws._authTimeout);
       ws._authenticated = true;
 
-      // Send available models list
-      sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
+      try {
+        // Send available models list
+        sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
 
-      // Create a default session
-      const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
-      conn.session = sessions.createSession(null, defaultModel);
-      await sessions.saveSession(conn.session);
+        // Create a default session
+        const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+        conn.session = sessions.createSession(null, defaultModel);
+        await sessions.saveSession(conn.session);
 
-      sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-      sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
-      console.log(`[WS] Authenticated: ${connectionId}`);
+        sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+        sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
+        console.log(`[WS] Authenticated: ${connectionId}`);
+      } catch (err) {
+        console.error(`[WS] Auth handler error:`, err.message);
+        sendFrame(ws, 'error', { message: 'Server error during initialization.' });
+        ws.terminate();
+      }
       return;
     }
 
@@ -189,31 +196,52 @@ wss.on('connection', (ws, request) => {
 
     switch (payload.type) {
       case 'command':
-        await handleCommand(ws, conn, payload);
+        await handleCommand(ws, conn, payload).catch(err => {
+          console.error(`[WS] Command handler error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Command failed.' });
+        });
         break;
 
       case 'session_list':
-        await handleSessionList(ws);
+        await handleSessionList(ws).catch(err => {
+          console.error(`[WS] Session list error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to list sessions.' });
+        });
         break;
 
       case 'session_create':
-        await handleSessionCreate(ws, conn, payload);
+        await handleSessionCreate(ws, conn, payload).catch(err => {
+          console.error(`[WS] Session create error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to create session.' });
+        });
         break;
 
       case 'session_load':
-        await handleSessionLoad(ws, conn, payload);
+        await handleSessionLoad(ws, conn, payload).catch(err => {
+          console.error(`[WS] Session load error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to load session.' });
+        });
         break;
 
       case 'session_delete':
-        await handleSessionDelete(ws, payload);
+        await handleSessionDelete(ws, payload).catch(err => {
+          console.error(`[WS] Session delete error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to delete session.' });
+        });
         break;
 
       case 'session_rename':
-        await handleSessionRename(ws, payload);
+        await handleSessionRename(ws, payload).catch(err => {
+          console.error(`[WS] Session rename error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to rename session.' });
+        });
         break;
 
       case 'model_switch':
-        await handleModelSwitch(ws, conn, payload);
+        await handleModelSwitch(ws, conn, payload).catch(err => {
+          console.error(`[WS] Model switch error:`, err.message);
+          sendFrame(ws, 'error', { message: 'Failed to switch model.' });
+        });
         break;
 
       default:
