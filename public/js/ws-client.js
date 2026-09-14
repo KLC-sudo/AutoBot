@@ -9,9 +9,12 @@ const WsClient = (() => {
   let _token = null;
   let _intentionalClose = false;
   let _keepaliveInterval = null;
+  let _connectedAt = 0;
+  let _authedAt = 0;
 
   const MAX_RECONNECT_DELAY = 30000;
-  const BASE_RECONNECT_DELAY = 1000;
+  const BASE_RECONNECT_DELAY = 2000;
+  const SHORT_LIFETIME_MS = 5000;
 
   // Message handlers registry
   const _handlers = {};
@@ -26,7 +29,6 @@ const WsClient = (() => {
   }
 
   function connect(token) {
-    // Close any existing connection before creating a new one
     if (ws) {
       try { ws.close(); } catch {}
       ws = null;
@@ -41,7 +43,6 @@ const WsClient = (() => {
   }
 
   function _doConnect() {
-    // Ensure old WS is cleaned up
     if (ws) {
       try { ws.close(); } catch {}
       ws = null;
@@ -61,6 +62,7 @@ const WsClient = (() => {
     }
 
     ws.onopen = () => {
+      _connectedAt = Date.now();
       console.log('[WS] Socket open, sending auth...');
       const authPayload = { type: 'auth', token: _token };
       const savedSessionId = Auth.getSessionId();
@@ -84,16 +86,17 @@ const WsClient = (() => {
     };
 
     ws.onclose = (event) => {
-      console.log(`[WS] Closed: code=${event.code}`);
+      const lifetime = _connectedAt ? ((Date.now() - _connectedAt) / 1000).toFixed(1) : '?';
+      console.log(`[WS] Closed: code=${event.code} lifetime=${lifetime}s`);
       updateConnectionStatus('offline');
       _stopKeepalive();
-      _emit('disconnected', { code: event.code });
 
       if (!_intentionalClose) {
         if (!Auth.isAuthenticated()) {
           setLoginLoading(false);
           showLoginError('Connection lost. Please try again.');
         }
+        _emit('disconnected', { code: event.code });
         _scheduleReconnect();
       }
     };
@@ -150,11 +153,11 @@ const WsClient = (() => {
     // Built-in handling
     switch (packet.type) {
       case 'auth_success':
+        _authedAt = Date.now();
         console.log('[WS] Authenticated:', packet.connectionId);
         Auth.setToken(_token);
         setLoginLoading(false);
         updateConnectionStatus('online');
-        reconnectAttempts = 0;
         showDashboard();
         Terminal.addSystem(packet.message);
         setTimeout(() => {
@@ -208,23 +211,32 @@ const WsClient = (() => {
         break;
 
       case 'pong':
-        // Server pong received, connection is alive
         break;
     }
   }
 
   function _scheduleReconnect() {
     reconnectAttempts++;
-    // Cap reconnect attempts to avoid infinite loop
-    if (reconnectAttempts > 20) {
+
+    if (reconnectAttempts > 30) {
       console.error('[WS] Max reconnect attempts reached. Refreshing page...');
       location.reload();
       return;
     }
-    const delay = Math.min(
-      BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1),
-      MAX_RECONNECT_DELAY
-    );
+
+    // If the connection died within 5 seconds (proxy killing it, server crash),
+    // use much longer delays to avoid spamming a broken server
+    const lifetime = _connectedAt ? (Date.now() - _connectedAt) : 999999;
+    const isShortLived = lifetime < SHORT_LIFETIME_MS;
+
+    let delay;
+    if (isShortLived) {
+      // Short-lived connection: server is unstable, back off aggressively
+      delay = Math.min(5000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+      console.log(`[WS] Short-lived connection (${Math.round(lifetime / 1000)}s). Backing off aggressively.`);
+    } else {
+      delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+    }
 
     console.log(`[WS] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})`);
     showReconnectBanner(Math.round(delay / 1000));

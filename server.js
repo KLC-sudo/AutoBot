@@ -13,10 +13,14 @@ const sessions = require('./sessions');
 // ─── Process-level error handlers (prevent Railway crashes) ────────
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
+  console.error(reason?.stack || reason);
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught Exception:', err.message);
   console.error(err.stack);
+  // Exit after uncaught exception — Railway will restart the process
+  // Continuing in a corrupted state causes silent failures
+  setTimeout(() => process.exit(1), 500);
 });
 
 // ─── Configuration ───────────────────────────────────────────────────
@@ -129,16 +133,21 @@ app.get('*', (_req, res) => {
 const wss = new WebSocket.Server({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
 
 server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    ws._authenticated = false;
-    ws._authTimeout = setTimeout(() => {
-      if (!ws._authenticated) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Auth timeout.' }));
-        ws.terminate();
-      }
-    }, 5000);
-    wss.emit('connection', ws, request);
-  });
+  try {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws._authenticated = false;
+      ws._authTimeout = setTimeout(() => {
+        if (!ws._authenticated) {
+          try { ws.send(JSON.stringify({ type: 'error', message: 'Auth timeout.' })); } catch {}
+          ws.terminate();
+        }
+      }, 5000);
+      wss.emit('connection', ws, request);
+    });
+  } catch (err) {
+    console.error('[WS] Upgrade error:', err.message);
+    socket.destroy();
+  }
 });
 
 // ─── Per-connection state ────────────────────────────────────────────
@@ -157,10 +166,12 @@ function sendFrame(ws, type, data) {
 // ─── Connection Handler ─────────────────────────────────────────────
 wss.on('connection', (ws, request) => {
   const connectionId = crypto.randomUUID();
-  console.log(`[WS] Connected: ${connectionId}`);
+  const clientIp = request.headers['x-forwarded-for'] || request.socket.remoteAddress;
+  console.log(`[WS] Connected: ${connectionId} from ${clientIp}`);
 
   connections.set(ws, { id: connectionId, session: null, processing: false });
   ws._isAlive = true; // Mark alive for heartbeat
+  ws._connectedAt = Date.now();
 
   ws.on('message', async (raw) => {
     try {
@@ -225,6 +236,7 @@ wss.on('connection', (ws, request) => {
         }
       } catch (err) {
         console.error(`[WS] Auth handler error:`, err.message);
+        console.error(err.stack);
         sendFrame(ws, 'error', { message: 'Server error during initialization.' });
         ws.terminate();
       }
@@ -299,9 +311,10 @@ wss.on('connection', (ws, request) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
     const conn = connections.get(ws);
-    console.log(`[WS] Disconnected: ${conn?.id}`);
+    const alive = ((Date.now() - (ws._connectedAt || Date.now())) / 1000).toFixed(1);
+    console.log(`[WS] Disconnected: ${conn?.id} code=${code} reason=${reason || 'none'} alive=${alive}s`);
     connections.delete(ws);
   });
 
@@ -314,16 +327,15 @@ wss.on('connection', (ws, request) => {
 });
 
 // ─── Heartbeat ──────────────────────────────────────────────────────
-// Interval is 120s because Railway's proxy can interfere with WS ping/pong.
-// Client sends keepalive every 15s (application-level), server just
-// checks if connections are still alive on a long interval.
+// Railway's proxy can kill idle WebSocket connections. 30s heartbeat
+// ensures the TCP connection stays alive through the proxy.
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws._isAlive === false) return ws.terminate();
     ws._isAlive = false;
     ws.ping();
   });
-}, 120000);
+}, 30000);
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 // ─── Command Handler ────────────────────────────────────────────────
