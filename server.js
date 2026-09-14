@@ -10,17 +10,25 @@ const crypto = require('crypto');
 const { runAgent } = require('./agent');
 const sessions = require('./sessions');
 
-// ─── Process-level error handlers (prevent Railway crashes) ────────
+// ─── Process-level error handlers ───────────────────────────────────
+let _crashCount = 0;
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
   console.error(reason?.stack || reason);
+  _crashCount++;
+  if (_crashCount > 5) {
+    console.error('[FATAL] Too many rejections, exiting.');
+    process.exit(1);
+  }
 });
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught Exception:', err.message);
   console.error(err.stack);
-  // Exit after uncaught exception — Railway will restart the process
-  // Continuing in a corrupted state causes silent failures
-  setTimeout(() => process.exit(1), 500);
+  _crashCount++;
+  if (_crashCount > 5) {
+    console.error('[FATAL] Too many exceptions, exiting.');
+    process.exit(1);
+  }
 });
 
 // ─── Configuration ───────────────────────────────────────────────────
@@ -199,7 +207,7 @@ wss.on('connection', (ws, request) => {
       ws._authenticated = true;
 
       try {
-        // Send available models list
+        console.log(`[WS] Auth step 1: sending models`);
         sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
 
         // ── Session Resume Logic ──
@@ -207,6 +215,7 @@ wss.on('connection', (ws, request) => {
         let resumed = false;
 
         if (requestedSessionId) {
+          console.log(`[WS] Auth step 2: loading session ${requestedSessionId}`);
           const loaded = await sessions.loadSession(requestedSessionId);
           if (loaded) {
             conn.session = loaded;
@@ -227,13 +236,18 @@ wss.on('connection', (ws, request) => {
         }
 
         if (!resumed) {
+          console.log(`[WS] Auth step 2: creating new session`);
           const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
           conn.session = sessions.createSession(null, defaultModel);
+          console.log(`[WS] Auth step 3: saving session`);
           await sessions.saveSession(conn.session);
+          console.log(`[WS] Auth step 4: sending session stats`);
           sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+          console.log(`[WS] Auth step 5: sending auth_success`);
           sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
           console.log(`[WS] Authenticated: ${connectionId} — new session`);
         }
+        console.log(`[WS] Auth handler complete for ${connectionId}`);
       } catch (err) {
         console.error(`[WS] Auth handler error:`, err.message);
         console.error(err.stack);
@@ -299,6 +313,7 @@ wss.on('connection', (ws, request) => {
         break;
 
       case 'ping':
+        ws._isAlive = true;
         sendFrame(ws, 'pong', {});
         break;
 
@@ -327,15 +342,18 @@ wss.on('connection', (ws, request) => {
 });
 
 // ─── Heartbeat ──────────────────────────────────────────────────────
-// Railway's proxy can kill idle WebSocket connections. 30s heartbeat
-// ensures the TCP connection stays alive through the proxy.
+// Uses application-level pong tracking instead of ws.ping() because
+// Railway's reverse proxy may not forward WebSocket protocol pings.
+// Client sends { type: 'ping' } every 15s, server marks _isAlive on receipt.
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
-    if (ws._isAlive === false) return ws.terminate();
+    if (ws._isAlive === false) {
+      console.log(`[WS] Heartbeat timeout, terminating connection`);
+      return ws.terminate();
+    }
     ws._isAlive = false;
-    ws.ping();
   });
-}, 30000);
+}, 45000);
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 // ─── Command Handler ────────────────────────────────────────────────
