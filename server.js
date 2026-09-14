@@ -341,20 +341,22 @@ wss.on('connection', (ws, request) => {
   ws.on('pong', () => { ws._isAlive = true; });
 });
 
-// ─── Heartbeat ──────────────────────────────────────────────────────
-// Uses application-level pong tracking instead of ws.ping() because
-// Railway's reverse proxy may not forward WebSocket protocol pings.
-// Client sends { type: 'ping' } every 15s, server marks _isAlive on receipt.
-const heartbeatInterval = setInterval(() => {
+// ─── Keepalive — send data to client to prevent proxy idle kill ────
+// Railway's proxy has a ~30s read timeout. The SERVER must send data
+// to the client (not the other way around) to keep the proxy alive.
+// Sends a keepalive frame every 20s and checks client liveness.
+const keepaliveInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws._isAlive === false) {
-      console.log(`[WS] Heartbeat timeout, terminating connection`);
+      console.log(`[WS] Keepalive timeout, terminating connection`);
       return ws.terminate();
     }
     ws._isAlive = false;
+    // Send a keepalive frame to the client — this resets the proxy read timeout
+    sendFrame(ws, 'keepalive', { t: Date.now() });
   });
-}, 45000);
-wss.on('close', () => clearInterval(heartbeatInterval));
+}, 20000);
+wss.on('close', () => clearInterval(keepaliveInterval));
 
 // ─── Command Handler ────────────────────────────────────────────────
 async function handleCommand(ws, conn, payload) {
@@ -459,7 +461,7 @@ async function handleModelSwitch(ws, conn, payload) {
 // ─── Graceful Shutdown ──────────────────────────────────────────────
 function shutdown(signal) {
   console.log(`\n[SHUTDOWN] ${signal}`);
-  clearInterval(heartbeatInterval);
+  clearInterval(keepaliveInterval);
   wss.clients.forEach((ws) => {
     ws.send(JSON.stringify({ type: 'status', message: 'Server shutting down.' }));
     ws.close(1001);
