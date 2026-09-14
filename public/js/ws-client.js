@@ -1,16 +1,14 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ws-client.js — HTTP/SSE transport (replaces WebSocket for Railway compat)
-   Server→Client: EventSource (SSE)
-   Client→Server: fetch POST
+   ws-client.js — HTTP Long-Poll transport
+   Client polls GET /api/poll, sends via POST /api/send
    ═══════════════════════════════════════════════════════════════════════ */
 
 const WsClient = (() => {
   let _token = null;
   let _connectionId = null;
   let _intentionalClose = false;
-  let _eventSource = null;
-  let _reconnectTimer = null;
-  let _reconnectAttempts = 0;
+  let _polling = false;
+  let _pollAbort = null;
 
   const _handlers = {};
 
@@ -26,7 +24,6 @@ const WsClient = (() => {
   function connect(token) {
     _token = token;
     _intentionalClose = false;
-    _reconnectAttempts = 0;
     _doConnect();
   }
 
@@ -35,53 +32,78 @@ const WsClient = (() => {
     updateConnectionStatus('connecting');
 
     try {
-      const authRes = await fetch('/api/auth', {
+      const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: _token, sessionId: Auth.getSessionId() }),
       });
 
-      if (!authRes.ok) {
-        const err = await authRes.json().catch(() => ({ error: 'Auth failed' }));
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Auth failed' }));
         showLoginError(err.error || 'Authentication failed');
         setLoginLoading(false);
         _intentionalClose = true;
         return;
       }
 
-      const { connectionId } = await authRes.json();
+      const { connectionId } = await res.json();
       _connectionId = connectionId;
-      console.log('[SSE] Authenticated:', connectionId);
-      _openSSE();
+      console.log('[HTTP] Authenticated:', connectionId);
+      updateConnectionStatus('online');
+      _startPolling();
     } catch (err) {
-      console.error('[SSE] Connection error:', err);
-      _scheduleReconnect();
+      console.error('[HTTP] Auth error:', err);
+      setTimeout(() => _doConnect(), 3000);
     }
   }
 
-  function _openSSE() {
-    if (_eventSource) { _eventSource.close(); _eventSource = null; }
+  function _startPolling() {
+    if (_polling) return;
+    _polling = true;
+    _pollLoop();
+  }
 
-    const url = `/api/stream?cid=${encodeURIComponent(_connectionId)}`;
-    _eventSource = new EventSource(url);
+  async function _pollLoop() {
+    while (_polling && !_intentionalClose && _connectionId) {
+      try {
+        const controller = new AbortController();
+        _pollAbort = controller;
 
-    _eventSource.onopen = () => {
-      console.log('[SSE] Stream open');
-      updateConnectionStatus('online');
-      _reconnectAttempts = 0;
-    };
+        const res = await fetch(`/api/poll?cid=${encodeURIComponent(_connectionId)}`, {
+          signal: controller.signal,
+        });
 
-    _eventSource.onmessage = (event) => {
-      try { _handlePacket(JSON.parse(event.data)); } catch {}
-    };
+        _pollAbort = null;
 
-    _eventSource.onerror = () => {
-      console.log('[SSE] Stream closed');
-      updateConnectionStatus('offline');
-      _eventSource.close();
-      _eventSource = null;
-      if (!_intentionalClose) _scheduleReconnect();
-    };
+        if (!res.ok) {
+          console.log('[HTTP] Poll error:', res.status);
+          _polling = false;
+          _reconnect();
+          return;
+        }
+
+        const { messages } = await res.json();
+        for (const msg of messages) {
+          _handlePacket(msg);
+        }
+      } catch (err) {
+        _pollAbort = null;
+        if (err.name === 'AbortError') continue;
+        if (_intentionalClose) return;
+        console.log('[HTTP] Poll failed:', err.message);
+        _polling = false;
+        _reconnect();
+        return;
+      }
+    }
+  }
+
+  function _reconnect() {
+    if (_intentionalClose) return;
+    setTimeout(() => {
+      _polling = false;
+      _doConnect();
+    }, 1000);
   }
 
   function _handlePacket(packet) {
@@ -89,7 +111,7 @@ const WsClient = (() => {
 
     switch (packet.type) {
       case 'auth_success':
-        console.log('[SSE] Ready:', packet.connectionId);
+        console.log('[HTTP] Ready:', packet.connectionId);
         Auth.setToken(_token);
         setLoginLoading(false);
         updateConnectionStatus('online');
@@ -143,44 +165,23 @@ const WsClient = (() => {
     }
   }
 
-  async function _post(type, payload) {
-    try {
-      const res = await fetch('/api/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Connection-Id': _connectionId,
-        },
-        body: JSON.stringify({ type, ...payload }),
-      });
-      return await res.json();
-    } catch (err) {
-      console.error('[HTTP] Send error:', err);
-      return { error: err.message };
-    }
+  function send(type, data) {
+    fetch('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Connection-Id': _connectionId },
+      body: JSON.stringify({ type, ...data }),
+    }).catch(err => console.error('[HTTP] Send error:', err));
   }
 
-  function send(type, data) { _post(type, data); }
-
-  function sendCommand(text) { _post('command', { data: text }); }
+  function sendCommand(text) { send('command', { data: text }); }
 
   function disconnect() {
     _intentionalClose = true;
-    clearTimeout(_reconnectTimer);
-    if (_eventSource) { _eventSource.close(); _eventSource = null; }
+    _polling = false;
+    if (_pollAbort) _pollAbort.abort();
   }
 
-  function _scheduleReconnect() {
-    _reconnectAttempts++;
-    if (_reconnectAttempts > 60) { location.reload(); return; }
-    const delay = Math.min(1000 * Math.pow(1.5, _reconnectAttempts - 1), 10000);
-    console.log(`[SSE] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${_reconnectAttempts})`);
-    _reconnectTimer = setTimeout(() => _doConnect(), delay);
-  }
-
-  function isConnected() {
-    return _eventSource && _eventSource.readyState === EventSource.OPEN;
-  }
+  function isConnected() { return _polling && !!_connectionId; }
 
   return { connect, send, sendCommand, disconnect, isConnected, on };
 })();
