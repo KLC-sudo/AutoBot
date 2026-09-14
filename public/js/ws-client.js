@@ -90,6 +90,10 @@ const WsClient = (() => {
       _emit('disconnected', { code: event.code });
 
       if (!_intentionalClose) {
+        if (!Auth.isAuthenticated()) {
+          setLoginLoading(false);
+          showLoginError('Connection lost. Please try again.');
+        }
         _scheduleReconnect();
       }
     };
@@ -148,14 +152,11 @@ const WsClient = (() => {
       case 'auth_success':
         console.log('[WS] Authenticated:', packet.connectionId);
         Auth.setToken(_token);
+        setLoginLoading(false);
         updateConnectionStatus('online');
+        reconnectAttempts = 0;
         showDashboard();
-        // On reconnect (not first login), clear terminal so replay doesn't duplicate
-        if (reconnectAttempts > 0) {
-          Terminal.clear();
-        }
         Terminal.addSystem(packet.message);
-        // Request session list and models after auth (also on reconnect)
         setTimeout(() => {
           _send({ type: 'session_list' });
         }, 100);

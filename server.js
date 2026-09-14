@@ -32,6 +32,10 @@ if (!UI_PASSWORD || UI_PASSWORD === 'change_this_immediately') {
   process.exit(1);
 }
 
+if (!process.env.OPENROUTER_API_KEY) {
+  console.warn('WARNING: OPENROUTER_API_KEY is not set. Agent will not be able to process commands.');
+}
+
 // ─── Express App ─────────────────────────────────────────────────────
 const app = express();
 app.set('trust proxy', 1);
