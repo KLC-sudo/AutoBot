@@ -1,6 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
    ws-client.js — HTTP Long-Poll transport
-   Client polls GET /api/poll, sends via POST /api/send
    ═══════════════════════════════════════════════════════════════════════ */
 
 const WsClient = (() => {
@@ -8,7 +7,7 @@ const WsClient = (() => {
   let _connectionId = null;
   let _intentionalClose = false;
   let _polling = false;
-  let _pollAbort = null;
+  let _pollTimer = null;
 
   const _handlers = {};
 
@@ -22,88 +21,92 @@ const WsClient = (() => {
   }
 
   function connect(token) {
+    console.log('[HTTP] connect() called');
+    if (_polling || _connectionId) {
+      console.log('[HTTP] Already connected, ignoring');
+      return;
+    }
     _token = token;
     _intentionalClose = false;
-    _doConnect();
+    _doAuth();
   }
 
-  async function _doConnect() {
+  async function _doAuth() {
     if (_intentionalClose) return;
     updateConnectionStatus('connecting');
 
     try {
+      console.log('[HTTP] POST /api/auth ...');
       const res = await fetch('/api/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: _token, sessionId: Auth.getSessionId() }),
       });
 
+      console.log('[HTTP] Auth response:', res.status);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Auth failed' }));
+        console.log('[HTTP] Auth failed:', err.error);
         showLoginError(err.error || 'Authentication failed');
         setLoginLoading(false);
         _intentionalClose = true;
         return;
       }
 
-      const { connectionId } = await res.json();
-      _connectionId = connectionId;
-      console.log('[HTTP] Authenticated:', connectionId);
+      const data = await res.json();
+      _connectionId = data.connectionId;
+      console.log('[HTTP] Authenticated:', _connectionId);
       updateConnectionStatus('online');
-      _startPolling();
+      _startPoll();
     } catch (err) {
       console.error('[HTTP] Auth error:', err);
-      setTimeout(() => _doConnect(), 3000);
+      _scheduleRetry(3000);
     }
   }
 
-  function _startPolling() {
+  function _startPoll() {
     if (_polling) return;
     _polling = true;
-    _pollLoop();
+    console.log('[HTTP] Starting poll loop');
+    _pollOnce();
   }
 
-  async function _pollLoop() {
+  async function _pollOnce() {
     while (_polling && !_intentionalClose && _connectionId) {
       try {
-        const controller = new AbortController();
-        _pollAbort = controller;
-
-        const res = await fetch(`/api/poll?cid=${encodeURIComponent(_connectionId)}`, {
-          signal: controller.signal,
-        });
-
-        _pollAbort = null;
+        const url = `/api/poll?cid=${encodeURIComponent(_connectionId)}`;
+        const res = await fetch(url);
 
         if (!res.ok) {
           console.log('[HTTP] Poll error:', res.status);
           _polling = false;
-          _reconnect();
+          _connectionId = null;
+          _scheduleRetry(2000);
           return;
         }
 
-        const { messages } = await res.json();
-        for (const msg of messages) {
-          _handlePacket(msg);
+        const data = await res.json();
+        if (data.messages && data.messages.length > 0) {
+          console.log(`[HTTP] Received ${data.messages.length} messages`);
+          for (const msg of data.messages) {
+            _handlePacket(msg);
+          }
         }
       } catch (err) {
-        _pollAbort = null;
-        if (err.name === 'AbortError') continue;
-        if (_intentionalClose) return;
-        console.log('[HTTP] Poll failed:', err.message);
+        console.error('[HTTP] Poll failed:', err.message);
         _polling = false;
-        _reconnect();
+        _connectionId = null;
+        _scheduleRetry(2000);
         return;
       }
     }
   }
 
-  function _reconnect() {
-    if (_intentionalClose) return;
-    setTimeout(() => {
-      _polling = false;
-      _doConnect();
-    }, 1000);
+  function _scheduleRetry(ms) {
+    clearTimeout(_pollTimer);
+    _pollTimer = setTimeout(() => {
+      if (!_intentionalClose) _doAuth();
+    }, ms);
   }
 
   function _handlePacket(packet) {
@@ -166,6 +169,7 @@ const WsClient = (() => {
   }
 
   function send(type, data) {
+    if (!_connectionId) return;
     fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Connection-Id': _connectionId },
@@ -178,7 +182,8 @@ const WsClient = (() => {
   function disconnect() {
     _intentionalClose = true;
     _polling = false;
-    if (_pollAbort) _pollAbort.abort();
+    clearTimeout(_pollTimer);
+    _connectionId = null;
   }
 
   function isConnected() { return _polling && !!_connectionId; }

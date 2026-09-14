@@ -110,30 +110,28 @@ app.get('/api/poll', (req, res) => {
   const conn = conns.get(connId);
   conn.lastPoll = Date.now();
 
-  // If messages are already queued, send them immediately
   if (conn.queue.length > 0) {
     const messages = conn.queue.splice(0);
+    console.log(`[POLL] ${connId}: ${messages.length} messages (immediate)`);
     return res.json({ messages });
   }
 
-  // Wait up to 25s for new messages
   let sent = false;
   const timeout = setTimeout(() => {
     if (!sent) { sent = true; res.json({ messages: [] }); }
   }, 25000);
 
-  // Check every 200ms for new messages (lightweight polling within the held connection)
   const check = setInterval(() => {
     if (conn.queue.length > 0 && !sent) {
       sent = true;
       clearTimeout(timeout);
       clearInterval(check);
       const messages = conn.queue.splice(0);
+      console.log(`[POLL] ${connId}: ${messages.length} messages`);
       res.json({ messages });
     }
   }, 200);
 
-  // Clean up on client disconnect
   req.on('close', () => {
     clearTimeout(timeout);
     clearInterval(check);
