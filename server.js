@@ -10,6 +10,15 @@ const crypto = require('crypto');
 const { runAgent } = require('./agent');
 const sessions = require('./sessions');
 
+// ─── Process-level error handlers (prevent Railway crashes) ────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Promise Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err.message);
+  console.error(err.stack);
+});
+
 // ─── Configuration ───────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const UI_PASSWORD = process.env.WEB_UI_PASSWORD;
@@ -132,8 +141,12 @@ server.on('upgrade', (request, socket, head) => {
 const connections = new Map(); // ws -> { id, session, processing }
 
 function sendFrame(ws, type, data) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type, ...data }));
+  try {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type, ...data }));
+    }
+  } catch (err) {
+    console.error(`[WS] sendFrame error (${type}):`, err.message);
   }
 }
 
@@ -146,6 +159,7 @@ wss.on('connection', (ws, request) => {
   ws._isAlive = true; // Mark alive for heartbeat
 
   ws.on('message', async (raw) => {
+    try {
     let payload;
     try {
       payload = JSON.parse(raw.toString());
@@ -270,6 +284,10 @@ wss.on('connection', (ws, request) => {
 
       default:
         sendFrame(ws, 'error', { message: `Unknown type: ${payload.type}` });
+    }
+    } catch (err) {
+      console.error(`[WS] Message handler error:`, err.message);
+      console.error(err.stack);
     }
   });
 
