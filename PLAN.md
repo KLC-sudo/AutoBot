@@ -82,6 +82,50 @@
 
 ---
 
+### CRITICAL: WebSocket Connection Loop (PENDING FIX)
+**Symptom:** Client connects, authenticates successfully, then connection drops with code 1006 (abnormal closure). Client enters reconnect loop creating new connections. Happens on both PC and mobile.
+
+**Evidence from Railway Logs:**
+- Server NEVER crashes — runs continuously from deploy
+- Connections authenticate and last 20 seconds to 6 minutes
+- Two devices (mobile + PC) often connected simultaneously
+- Mobile drops when Android Go backgrounds the tab, reconnects
+- Each reconnection creates "new session" (conversation lost)
+- Server heartbeat (120s) sometimes kills connections when Railway's proxy blocks WS ping/pong frames
+
+**Root Causes Identified (partially):**
+1. **Railway proxy interference** — Railway's reverse proxy sometimes blocks WebSocket protocol-level ping/pong frames. Server sends ping → proxy drops it → client never responds → server's heartbeat sees `_isAlive = false` → terminates connection
+2. **Android Go background kills** — Mobile browser terminates WebSocket when tab is backgrounded (known Android Go behavior)
+3. **Session resume race condition (fixed)** — `listSessions()` was cleaning up empty sessions while they were actively in use by connected clients, causing resume to fail
+4. **Client-side reconnection behavior** — Old cached `?v=4` JS code had bugs in reconnection logic (cache busting issue)
+
+**Fixes Applied (partial):**
+1. Server heartbeat increased from 30s → 120s (reduces proxy interference)
+2. Client-side keepalive ping every 15s (application-level, keeps TCP alive through proxy)
+3. `listSessions()` no longer cleans up sessions (only on startup via `cleanupEmptySessions`)
+4. Session resume re-enabled (`sessionId` in auth payload)
+5. `_doConnect()` closes old WebSocket before creating new one
+6. Max reconnect cap (20 attempts then page reload)
+7. CSP inline script moved to external file
+8. All process-level error handlers added (`unhandledRejection`, `uncaughtException`)
+9. Version bumped to `?v=6` for cache bust
+
+**Still Investigating:**
+- Railway proxy WebSocket support — may need to switch to HTTP long-polling fallback
+- Whether Railway's proxy has a configurable WebSocket timeout
+- Whether `perMessageDeflate: false` vs `true` affects proxy behavior
+- Whether WSS (TLS) vs WS matters for proxy frame handling
+
+**Next Steps (when revisited):**
+- Check Railway docs for WebSocket proxy configuration
+- Test with `NODE_OPTIONS=--max-http-header-size=16384` (Railway may have header limits)
+- Consider switching to Socket.IO (adds HTTP long-polling fallback automatically)
+- Consider using `ws` library's `backoff` option for reconnection
+- Test on a non-Railway platform to isolate proxy vs code issues
+- Add connection diagnostics endpoint (`/api/ws-stats`) to monitor active connections
+
+---
+
 ## Pending Features & Improvements
 
 ### Testing Infrastructure (NOT STARTED)
