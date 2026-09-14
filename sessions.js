@@ -163,17 +163,10 @@ async function listSessions() {
   const sessions = [];
 
   for (const file of files) {
-    if (!file.endsWith('.json')) continue;
+    if (!file.endsWith('.json') || file.startsWith('.')) continue;
     try {
       const data = await fsp.readFile(path.join(SESSIONS_DIR, file), 'utf8');
       const session = JSON.parse(data);
-
-      // Auto-delete empty sessions (0 messages, older than 5 minutes)
-      if (session.messages.length === 0 && Date.now() - session.createdAt > 5 * 60 * 1000) {
-        console.log(`[Sessions] Cleaning up empty session: ${session.id}`);
-        await fsp.unlink(path.join(SESSIONS_DIR, file)).catch(() => {});
-        continue;
-      }
 
       sessions.push({
         id: session.id,
