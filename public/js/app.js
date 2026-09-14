@@ -6,6 +6,7 @@
 /* ─── State ─────────────────────────────────────────────────────── */
 let currentSessionId = null;
 let availableModels = [];
+let mobileCodePanelVisible = false;
 
 /* ─── Mobile Viewport Fix ──────────────────────────────────────── */
 // Android Go Edition (and older Android Chrome) doesn't support 100dvh.
@@ -46,6 +47,11 @@ const CodeViewer = (() => {
     codeEl.textContent = data;
     _highlight(codeEl);
     switchCodeView('code');
+
+    // On mobile, auto-show the code panel when new code arrives
+    if (isMobile() && !mobileCodePanelVisible) {
+      showMobileCodePanel();
+    }
   }
 
   function _highlight(codeEl) {
@@ -99,6 +105,29 @@ function switchCodeView(view) {
   document.querySelectorAll('.btn-tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
   document.getElementById('code-canvas').classList.toggle('hidden', view !== 'code');
   document.getElementById('diff-canvas').classList.toggle('hidden', view !== 'diff');
+}
+
+/* ─── Mobile Code Panel Toggle ──────────────────────────────────── */
+function showMobileCodePanel() {
+  if (!isMobile()) return;
+  const panel = document.getElementById('panel-code');
+  panel.classList.remove('mobile-hidden');
+  mobileCodePanelVisible = true;
+}
+
+function hideMobileCodePanel() {
+  if (!isMobile()) return;
+  const panel = document.getElementById('panel-code');
+  panel.classList.add('mobile-hidden');
+  mobileCodePanelVisible = false;
+}
+
+function toggleMobileCodePanel() {
+  if (mobileCodePanelVisible) {
+    hideMobileCodePanel();
+  } else {
+    showMobileCodePanel();
+  }
 }
 
 /* ─── Command Dispatch ──────────────────────────────────────────── */
@@ -237,6 +266,10 @@ function updateTokenDisplay(data) {
 
 function updateSessionDisplay(data) {
   currentSessionId = data.sessionId;
+
+  // Persist session ID for resume after reconnect/restart
+  Auth.setSessionId(data.sessionId);
+
   document.getElementById('session-title').textContent = data.model || 'Session';
 
   // Update token display from session stats
@@ -343,6 +376,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isMobile()) closeSidebar();
   });
 
+  // Mobile code panel toggle
+  document.getElementById('mobile-code-toggle').addEventListener('click', toggleMobileCodePanel);
+  document.getElementById('code-close-btn').addEventListener('click', hideMobileCodePanel);
+
   // Model selector
   document.getElementById('model-select').addEventListener('change', (e) => {
     if (e.target.value) {
@@ -363,6 +400,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (isMobile()) {
     sidebar.classList.add('collapsed');
     hamburger.style.display = 'flex';
+    // Hide code panel by default on mobile
+    document.getElementById('panel-code').classList.add('mobile-hidden');
   } else {
     sidebar.classList.remove('collapsed');
     hamburger.style.display = 'none';

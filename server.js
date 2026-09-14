@@ -173,14 +173,38 @@ wss.on('connection', (ws, request) => {
         // Send available models list
         sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
 
-        // Create a default session
-        const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
-        conn.session = sessions.createSession(null, defaultModel);
-        await sessions.saveSession(conn.session);
+        // ── Session Resume Logic ──
+        const requestedSessionId = payload.sessionId;
+        let resumed = false;
 
-        sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-        sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
-        console.log(`[WS] Authenticated: ${connectionId}`);
+        if (requestedSessionId) {
+          const loaded = await sessions.loadSession(requestedSessionId);
+          if (loaded) {
+            conn.session = loaded;
+            sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+            sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready. Session resumed.', connectionId });
+            for (const msg of loaded.messages) {
+              if (msg.role === 'user') {
+                sendFrame(ws, 'history', { role: 'user', content: msg.content });
+              } else if (msg.role === 'assistant' && msg.content) {
+                sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
+              }
+            }
+            resumed = true;
+            console.log(`[WS] Authenticated: ${connectionId} — resumed session ${requestedSessionId}`);
+          } else {
+            console.log(`[WS] Requested session ${requestedSessionId} not found, creating new...`);
+          }
+        }
+
+        if (!resumed) {
+          const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+          conn.session = sessions.createSession(null, defaultModel);
+          await sessions.saveSession(conn.session);
+          sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
+          sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
+          console.log(`[WS] Authenticated: ${connectionId} — new session`);
+        }
       } catch (err) {
         console.error(`[WS] Auth handler error:`, err.message);
         sendFrame(ws, 'error', { message: 'Server error during initialization.' });
@@ -321,6 +345,7 @@ async function handleSessionCreate(ws, conn, payload) {
   const name = payload.name || null;
   conn.session = sessions.createSession(name, model);
   await sessions.saveSession(conn.session);
+  await sessions.setActiveSession(conn.session.id);
   sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
   sendFrame(ws, 'status', { message: `New session created (${model})` });
 }
@@ -330,6 +355,7 @@ async function handleSessionLoad(ws, conn, payload) {
   const loaded = await sessions.loadSession(payload.id);
   if (!loaded) return sendFrame(ws, 'error', { message: 'Session not found.' });
   conn.session = loaded;
+  await sessions.setActiveSession(loaded.id);
   sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
   sendFrame(ws, 'status', { message: `Loaded: ${loaded.name}` });
 

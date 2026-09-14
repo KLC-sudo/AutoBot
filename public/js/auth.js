@@ -4,6 +4,7 @@
 
 const Auth = (() => {
   const STORAGE_KEY = 'hermes_session_token';
+  const SESSION_KEY = 'hermes_session_id';
   let _token = null;
 
   function getToken() {
@@ -32,7 +33,27 @@ const Auth = (() => {
     return !!getToken();
   }
 
-  return { getToken, setToken, clearToken, isAuthenticated };
+  // ── Session ID persistence (per-tab via sessionStorage) ──
+  // Using sessionStorage so each tab gets its own session context.
+  // A new tab starts fresh; same tab reconnects resume.
+  function getSessionId() {
+    try {
+      return sessionStorage.getItem(SESSION_KEY);
+    } catch { return null; }
+  }
+
+  function setSessionId(sessionId) {
+    try {
+      if (sessionId) sessionStorage.setItem(SESSION_KEY, sessionId);
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch { /* ignore */ }
+  }
+
+  function clearSessionId() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  }
+
+  return { getToken, setToken, clearToken, isAuthenticated, getSessionId, setSessionId, clearSessionId };
 })();
 
 /* ─── Login Handler ─────────────────────────────────────────────── */

@@ -36,7 +36,7 @@ html, body {
   overscroll-behavior: none;
 }
 
-.hidden { display: none !important; }
+.hidden { display: none; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -403,6 +403,13 @@ html, body {
     overflow: hidden;
   }
 
+  .panel-terminal { border-right: none; border-bottom: 1px solid var(--border); min-height: 0; flex: 1; }
+  .panel-code { width: 100%; min-width: unset; flex: 1; min-height: 0; overflow: hidden; }
+
+  /* Code viewer toggle — hidden by default on mobile */
+  .panel-code.mobile-hidden { display: none; }
+  .panel-code.mobile-hidden ~ .code-toggle-fallback { display: flex; }
+
   .sidebar {
     position: fixed; z-index: 50; height: 100%; left: 0; top: 0;
     width: 260px; min-width: 260px; box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
@@ -425,8 +432,6 @@ html, body {
     overflow: hidden;
   }
 
-  .panel-code { display: none; }
-
   .panel-header {
     display: flex;
     align-items: center;
@@ -448,7 +453,10 @@ html, body {
   .panel-header-right { gap: 4px; }
   .token-bar { width: 50px; }
   .token-label { display: none; }
-  .model-select { max-width: 110px; font-size: 10px; padding: 3px 6px; }
+  .model-select { max-width: 130px; font-size: 10px; padding: 3px 6px; }
+
+  /* Mobile code toggle button in terminal header */
+  .mobile-code-toggle { display: flex !important; }
 
   .terminal-stream {
     flex: 1 1 0;
@@ -473,6 +481,10 @@ html, body {
   .input-command { padding: 10px 12px; font-size: 14px; border-radius: var(--radius); }
   .btn-send { width: 44px; height: 44px; flex-shrink: 0; }
   .input-bar-footer { font-size: 10px; margin-top: 4px; }
+
+  /* Code panel header with toggle */
+  .panel-code .panel-header { flex-wrap: nowrap; }
+  .code-close-btn { display: flex !important; }
 }
 
 @media (max-width: 480px) {
@@ -489,4 +501,11 @@ html, body {
 @supports (padding: max(0px)) {
   .input-bar { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .panel-terminal { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Hide mobile-only elements on desktop */
+@media (min-width: 769px) {
+  .mobile-code-toggle { display: none !important; }
+  .code-close-btn { display: none !important; }
+}
 }

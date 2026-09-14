@@ -71,6 +71,7 @@
             <option value="">Loading models...</option>
           </select>
           <button id="clear-btn" class="btn-icon" title="Clear log">✕</button>
+          <button id="mobile-code-toggle" class="btn-icon mobile-code-toggle" title="Toggle code viewer" style="display:none">&lt;/&gt;</button>
         </div>
       </header>
 
@@ -91,7 +92,7 @@
     </section>
 
     <!-- RIGHT PANEL: Code / Diff Viewer -->
-    <section class="panel panel-code">
+    <section id="panel-code" class="panel panel-code">
       <header class="panel-header">
         <div class="panel-header-left">
           <h2 class="panel-title">Code Viewer</h2>
@@ -99,6 +100,7 @@
         <div class="panel-header-right">
           <button class="btn-icon btn-tab active" data-view="code">Code</button>
           <button class="btn-icon btn-tab" data-view="diff">Diff</button>
+          <button id="code-close-btn" class="btn-icon code-close-btn" title="Close code viewer" style="display:none">✕</button>
         </div>
       </header>
       <div id="code-filename" class="code-filename">No file loaded</div>
