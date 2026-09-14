@@ -208,6 +208,7 @@ function renderSessionList(sessions) {
     // Delete button
     el.querySelector('.session-item-delete').addEventListener('click', (e) => {
       e.stopPropagation();
+      if (!confirm(`Delete "${s.name || 'Untitled'}"?`)) return;
       el.classList.add('session-item-deleting');
       el.addEventListener('animationend', () => {
         WsClient.send('session_delete', { id: s.id });
