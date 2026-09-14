@@ -10,45 +10,45 @@ const crypto = require('crypto');
 const { runAgent } = require('./agent');
 const sessions = require('./sessions');
 
-// ─── Process-level error handlers ───────────────────────────────────
 let _crashCount = 0;
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
-  console.error(reason?.stack || reason);
   _crashCount++;
-  if (_crashCount > 5) {
-    console.error('[FATAL] Too many rejections, exiting.');
-    process.exit(1);
-  }
+  if (_crashCount > 5) process.exit(1);
 });
 process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught Exception:', err.message);
-  console.error(err.stack);
+  console.error('[FATAL] Uncaught Exception:', err.message, err.stack);
   _crashCount++;
-  if (_crashCount > 5) {
-    console.error('[FATAL] Too many exceptions, exiting.');
-    process.exit(1);
-  }
+  if (_crashCount > 5) process.exit(1);
 });
 
-// ─── Configuration ───────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 const UI_PASSWORD = process.env.WEB_UI_PASSWORD;
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
 const RATE_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000;
-const RATE_MAX = parseInt(process.env.RATE_LIMIT_MAX, 10) || 100;
-const WS_MAX_PAYLOAD = parseInt(process.env.WS_MAX_PAYLOAD, 10) || 1024 * 1024;
+const RATE_MAX = parseInt(process.env.RATE_LIMIT_MAX, 10) || 200;
 
 if (!UI_PASSWORD || UI_PASSWORD === 'change_this_immediately') {
-  console.error('FATAL: WEB_UI_PASSWORD must be set to a strong value in environment.');
+  console.error('FATAL: WEB_UI_PASSWORD must be set.');
   process.exit(1);
 }
-
 if (!process.env.OPENROUTER_API_KEY) {
-  console.warn('WARNING: OPENROUTER_API_KEY is not set. Agent will not be able to process commands.');
+  console.warn('WARNING: OPENROUTER_API_KEY is not set.');
 }
 
-// ─── Express App ─────────────────────────────────────────────────────
+function timingSafeCompare(a, b) {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) { crypto.timingSafeEqual(Buffer.alloc(bufA.length), bufA); return false; }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function verifyToken(req) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) return false;
+  return timingSafeCompare(auth.slice(7), UI_PASSWORD);
+}
+
+// ─── Express App ────────────────────────────────────────────────────
 const app = express();
 app.set('trust proxy', 1);
 const server = http.createServer(app);
@@ -60,7 +60,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:'],
-      connectSrc: ["'self'", 'wss:', 'ws:'],
+      connectSrc: ["'self'"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"],
@@ -72,401 +72,250 @@ app.use(helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 
-app.use(cors({
-  origin: true,
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false,
-}));
-
+app.use(cors({ origin: true, methods: ['GET', 'POST'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '16kb' }));
 
-const globalLimiter = rateLimit({
-  windowMs: RATE_WINDOW,
-  max: RATE_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, slow down.' },
-});
+const globalLimiter = rateLimit({ windowMs: RATE_WINDOW, max: RATE_MAX, standardHeaders: true, legacyHeaders: false });
 app.use(globalLimiter);
 
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: 0, etag: true, lastModified: true }));
-
-// Force no-cache on HTML files (prevents stale mobile caches)
 app.use((req, res, next) => {
   if (req.path.endsWith('.html') || req.path === '/') {
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
-    res.set('Surrogate-Control', 'no-store');
   }
   next();
 });
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+
+// ─── SSE Connections ────────────────────────────────────────────────
+// Each SSE connection gets an id, a message queue, and a session.
+const sseConnections = new Map(); // id -> { res, session, processing, queue }
+
+function sendSSE(connId, type, data) {
+  const conn = sseConnections.get(connId);
+  if (!conn) return;
+  const frame = `data: ${JSON.stringify({ type, ...data })}\n\n`;
+  conn.res.write(frame);
+}
+
+// ─── Auth endpoint (POST /api/auth) ─────────────────────────────────
+app.post('/api/auth', async (req, res) => {
+  const { token, sessionId } = req.body;
+  if (!token || !timingSafeCompare(token, UI_PASSWORD)) {
+    return res.status(401).json({ error: 'Invalid token.' });
+  }
+
+  const connId = crypto.randomUUID();
+  const conn = { res: null, session: null, processing: false, queue: [] };
+  sseConnections.set(connId, conn);
+
+  // Session resume/create
+  let resumed = false;
+  if (sessionId) {
+    const loaded = await sessions.loadSession(sessionId).catch(() => null);
+    if (loaded) {
+      conn.session = loaded;
+      resumed = true;
+      console.log(`[HTTP] Auth: ${connId} — resumed session ${sessionId}`);
+    }
+  }
+  if (!resumed) {
+    const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+    conn.session = sessions.createSession(null, defaultModel);
+    await sessions.saveSession(conn.session);
+    console.log(`[HTTP] Auth: ${connId} — new session`);
+  }
+
+  res.json({ connectionId: connId });
 });
 
-// ─── API Auth ────────────────────────────────────────────────────────
-function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or malformed Authorization header' });
+// ─── SSE Stream endpoint (GET /api/stream) ──────────────────────────
+app.get('/api/stream', (req, res) => {
+  const connId = req.query.cid || req.headers['x-connection-id'];
+  if (!connId || !sseConnections.has(connId)) {
+    return res.status(401).json({ error: 'Invalid connection. Re-authenticate.' });
   }
-  if (!timingSafeCompare(authHeader.slice(7), UI_PASSWORD)) {
-    return res.status(403).json({ error: 'Invalid token' });
+
+  const conn = sseConnections.get(connId);
+  conn.res = res;
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders();
+  res.write('\n');
+
+  // Send initial data
+  sendSSE(connId, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
+  sendSSE(connId, 'session', sessions.getSessionStats(conn.session));
+  sendSSE(connId, 'auth_success', { message: 'Hermes Agent ready.', connectionId: connId });
+  for (const msg of conn.session.messages) {
+    if (msg.role === 'user') sendSSE(connId, 'history', { role: 'user', content: msg.content });
+    else if (msg.role === 'assistant' && msg.content) sendSSE(connId, 'history', { role: 'assistant', content: msg.content });
   }
-  next();
+
+  // Keepalive comment every 15s to keep the connection alive through proxies
+  const keepalive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch {}
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    conn.res = null;
+    console.log(`[SSE] Stream closed: ${connId}`);
+  });
+
+  console.log(`[SSE] Stream opened: ${connId}`);
+});
+
+// ─── Send endpoint (POST /api/send) — client sends commands ─────────
+app.post('/api/send', async (req, res) => {
+  const connId = req.headers['x-connection-id'];
+  if (!connId || !sseConnections.has(connId)) {
+    return res.status(401).json({ error: 'Invalid connection.' });
+  }
+
+  const conn = sseConnections.get(connId);
+  const { type, ...payload } = req.body;
+
+  if (conn.processing && type === 'command') {
+    return res.status(429).json({ error: 'Agent is busy. Please wait.' });
+  }
+
+  try {
+    switch (type) {
+      case 'command':
+        conn.processing = true;
+        res.json({ ok: true });
+        handleCommandSSE(connId, conn, payload).catch(err => {
+          console.error(`[CMD] Error:`, err.message);
+          sendSSE(connId, 'error', { message: 'Command failed.' });
+        }).finally(() => { conn.processing = false; });
+        return;
+
+      case 'session_list': {
+        const list = await sessions.listSessions();
+        sendSSE(connId, 'session_list', { sessions: list });
+        res.json({ ok: true });
+        return;
+      }
+
+      case 'session_create': {
+        const model = payload.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
+        conn.session = sessions.createSession(payload.name || null, model);
+        await sessions.saveSession(conn.session);
+        sendSSE(connId, 'session', sessions.getSessionStats(conn.session));
+        sendSSE(connId, 'status', { message: `New session created (${model})` });
+        res.json({ ok: true });
+        return;
+      }
+
+      case 'session_load': {
+        if (!payload.id) return res.status(400).json({ error: 'Missing session id.' });
+        const loaded = await sessions.loadSession(payload.id);
+        if (!loaded) return res.status(404).json({ error: 'Session not found.' });
+        conn.session = loaded;
+        sendSSE(connId, 'session', sessions.getSessionStats(conn.session));
+        sendSSE(connId, 'status', { message: `Loaded: ${loaded.name}` });
+        for (const msg of loaded.messages) {
+          if (msg.role === 'user') sendSSE(connId, 'history', { role: 'user', content: msg.content });
+          else if (msg.role === 'assistant' && msg.content) sendSSE(connId, 'history', { role: 'assistant', content: msg.content });
+        }
+        res.json({ ok: true });
+        return;
+      }
+
+      case 'session_delete': {
+        if (!payload.id) return res.status(400).json({ error: 'Missing session id.' });
+        await sessions.deleteSession(payload.id);
+        sendSSE(connId, 'status', { message: 'Session deleted.' });
+        res.json({ ok: true });
+        return;
+      }
+
+      case 'session_rename': {
+        if (!payload.id) return res.status(400).json({ error: 'Missing session id.' });
+        if (!payload.name) return res.status(400).json({ error: 'Missing new name.' });
+        const s = await sessions.loadSession(payload.id);
+        if (!s) return res.status(404).json({ error: 'Session not found.' });
+        s.name = payload.name;
+        await sessions.saveSession(s);
+        sendSSE(connId, 'status', { message: `Renamed to "${payload.name}"` });
+        res.json({ ok: true });
+        return;
+      }
+
+      case 'model_switch': {
+        if (!payload.model) return res.status(400).json({ error: 'Missing model name.' });
+        conn.session.model = payload.model;
+        await sessions.saveSession(conn.session);
+        const ctx = sessions.getContextLength(payload.model);
+        sendSSE(connId, 'session', sessions.getSessionStats(conn.session));
+        sendSSE(connId, 'status', { message: `Switched to ${payload.model} (${ctx.toLocaleString()} tokens)` });
+        res.json({ ok: true });
+        return;
+      }
+
+      default:
+        return res.status(400).json({ error: `Unknown type: ${type}` });
+    }
+  } catch (err) {
+    console.error(`[HTTP] Send error:`, err.message);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// ─── Command Handler (SSE version) ──────────────────────────────────
+async function handleCommandSSE(connId, conn, payload) {
+  const command = (payload.data || '').trim();
+  if (!command) return sendSSE(connId, 'error', { message: 'Empty command.' });
+  if (command.length > 10000) return sendSSE(connId, 'error', { message: 'Command too long.' });
+
+  const workdir = process.env.WORKDIR || path.join(__dirname, 'data', 'workspace');
+  console.log(`[CMD] ${connId}: ${command}`);
+
+  const result = await runAgent(command, conn.session, {
+    onStatus:      (msg)  => sendSSE(connId, 'status', { message: msg }),
+    onCode:        (file, content) => sendSSE(connId, 'code', { filename: file, data: content }),
+    onText:        (msg)  => sendSSE(connId, 'text', { message: msg }),
+    onError:       (msg)  => sendSSE(connId, 'error', { message: msg }),
+    onTokenUpdate: (data) => sendSSE(connId, 'tokens', data),
+  }, workdir);
+
+  if (result) {
+    conn.session.messages.push(...result.messages);
+    conn.session.tokenUsage.prompt += result.tokenUsage.prompt;
+    conn.session.tokenUsage.completion += result.tokenUsage.completion;
+    conn.session.tokenUsage.total += result.tokenUsage.total;
+    await sessions.saveSession(conn.session);
+    sendSSE(connId, 'session', sessions.getSessionStats(conn.session));
+  }
 }
 
-function timingSafeCompare(a, b) {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) {
-    crypto.timingSafeEqual(Buffer.alloc(bufA.length), bufA);
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-app.get('/api/status', requireAuth, (_req, res) => {
-  res.json({ status: 'operational', agent: 'hermes', uptime: process.uptime(), connections: wss.clients.size });
+// ─── Status API ─────────────────────────────────────────────────────
+app.get('/api/status', (req, res) => {
+  if (!verifyToken(req)) return res.status(401).json({ error: 'Unauthorized' });
+  res.json({ status: 'operational', uptime: process.uptime(), connections: sseConnections.size });
 });
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ─── WebSocket Server ───────────────────────────────────────────────
-const wss = new WebSocket.Server({ noServer: true, maxPayload: WS_MAX_PAYLOAD, perMessageDeflate: false });
-
-server.on('upgrade', (request, socket, head) => {
-  try {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      ws._authenticated = false;
-      ws._authTimeout = setTimeout(() => {
-        if (!ws._authenticated) {
-          try { ws.send(JSON.stringify({ type: 'error', message: 'Auth timeout.' })); } catch {}
-          ws.terminate();
-        }
-      }, 5000);
-      wss.emit('connection', ws, request);
-    });
-  } catch (err) {
-    console.error('[WS] Upgrade error:', err.message);
-    socket.destroy();
-  }
-});
-
-// ─── Per-connection state ────────────────────────────────────────────
-const connections = new Map(); // ws -> { id, session, processing }
-
-function sendFrame(ws, type, data) {
-  try {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type, ...data }));
-    }
-  } catch (err) {
-    console.error(`[WS] sendFrame error (${type}):`, err.message);
-  }
-}
-
-// ─── Connection Handler ─────────────────────────────────────────────
-wss.on('connection', (ws, request) => {
-  const connectionId = crypto.randomUUID();
-  const clientIp = request.headers['x-forwarded-for'] || request.socket.remoteAddress;
-  console.log(`[WS] Connected: ${connectionId} from ${clientIp}`);
-
-  connections.set(ws, { id: connectionId, session: null, processing: false });
-  ws._isAlive = true; // Mark alive for heartbeat
-  ws._connectedAt = Date.now();
-
-  ws.on('message', async (raw) => {
-    try {
-    let payload;
-    try {
-      payload = JSON.parse(raw.toString());
-    } catch {
-      return sendFrame(ws, 'error', { message: 'Invalid JSON.' });
-    }
-
-    const conn = connections.get(ws);
-    if (!conn) return;
-
-    // ── Auth Handshake ──
-    if (!ws._authenticated) {
-      if (payload.type !== 'auth' || !payload.token) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Expected auth.' }));
-        return ws.terminate();
-      }
-      if (!timingSafeCompare(payload.token, UI_PASSWORD)) {
-        ws.send(JSON.stringify({ type: 'error', message: 'Invalid token.' }));
-        return ws.terminate();
-      }
-      clearTimeout(ws._authTimeout);
-      ws._authenticated = true;
-
-      try {
-        console.log(`[WS] Auth step 1: sending models`);
-        sendFrame(ws, 'models', { models: Object.keys(sessions.MODEL_CONTEXT_LENGTHS) });
-
-        // ── Session Resume Logic ──
-        const requestedSessionId = payload.sessionId;
-        let resumed = false;
-
-        if (requestedSessionId) {
-          console.log(`[WS] Auth step 2: loading session ${requestedSessionId}`);
-          const loaded = await sessions.loadSession(requestedSessionId);
-          if (loaded) {
-            conn.session = loaded;
-            sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-            sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready. Session resumed.', connectionId });
-            for (const msg of loaded.messages) {
-              if (msg.role === 'user') {
-                sendFrame(ws, 'history', { role: 'user', content: msg.content });
-              } else if (msg.role === 'assistant' && msg.content) {
-                sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
-              }
-            }
-            resumed = true;
-            console.log(`[WS] Authenticated: ${connectionId} — resumed session ${requestedSessionId}`);
-          } else {
-            console.log(`[WS] Requested session ${requestedSessionId} not found, creating new...`);
-          }
-        }
-
-        if (!resumed) {
-          console.log(`[WS] Auth step 2: creating new session`);
-          const defaultModel = process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
-          conn.session = sessions.createSession(null, defaultModel);
-          console.log(`[WS] Auth step 3: saving session`);
-          await sessions.saveSession(conn.session);
-          console.log(`[WS] Auth step 4: sending session stats`);
-          sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-          console.log(`[WS] Auth step 5: sending auth_success`);
-          sendFrame(ws, 'auth_success', { message: 'Hermes Agent ready.', connectionId });
-          console.log(`[WS] Authenticated: ${connectionId} — new session`);
-        }
-        console.log(`[WS] Auth handler complete for ${connectionId}`);
-      } catch (err) {
-        console.error(`[WS] Auth handler error:`, err.message);
-        console.error(err.stack);
-        sendFrame(ws, 'error', { message: 'Server error during initialization.' });
-        ws.terminate();
-      }
-      return;
-    }
-
-    // ── All other messages require auth ──
-    if (conn.processing && payload.type === 'command') {
-      return sendFrame(ws, 'error', { message: 'Agent is busy. Please wait.' });
-    }
-
-    switch (payload.type) {
-      case 'command':
-        await handleCommand(ws, conn, payload).catch(err => {
-          console.error(`[WS] Command handler error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Command failed.' });
-        });
-        break;
-
-      case 'session_list':
-        await handleSessionList(ws).catch(err => {
-          console.error(`[WS] Session list error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to list sessions.' });
-        });
-        break;
-
-      case 'session_create':
-        await handleSessionCreate(ws, conn, payload).catch(err => {
-          console.error(`[WS] Session create error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to create session.' });
-        });
-        break;
-
-      case 'session_load':
-        await handleSessionLoad(ws, conn, payload).catch(err => {
-          console.error(`[WS] Session load error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to load session.' });
-        });
-        break;
-
-      case 'session_delete':
-        await handleSessionDelete(ws, payload).catch(err => {
-          console.error(`[WS] Session delete error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to delete session.' });
-        });
-        break;
-
-      case 'session_rename':
-        await handleSessionRename(ws, payload).catch(err => {
-          console.error(`[WS] Session rename error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to rename session.' });
-        });
-        break;
-
-      case 'model_switch':
-        await handleModelSwitch(ws, conn, payload).catch(err => {
-          console.error(`[WS] Model switch error:`, err.message);
-          sendFrame(ws, 'error', { message: 'Failed to switch model.' });
-        });
-        break;
-
-      case 'ping':
-        ws._isAlive = true;
-        sendFrame(ws, 'pong', {});
-        break;
-
-      default:
-        sendFrame(ws, 'error', { message: `Unknown type: ${payload.type}` });
-    }
-    } catch (err) {
-      console.error(`[WS] Message handler error:`, err.message);
-      console.error(err.stack);
-    }
-  });
-
-  ws.on('close', (code, reason) => {
-    const conn = connections.get(ws);
-    const alive = ((Date.now() - (ws._connectedAt || Date.now())) / 1000).toFixed(1);
-    console.log(`[WS] Disconnected: ${conn?.id} code=${code} reason=${reason || 'none'} alive=${alive}s`);
-    connections.delete(ws);
-  });
-
-  ws.on('error', (err) => {
-    console.error(`[WS] Error:`, err.message);
-    connections.delete(ws);
-  });
-
-  ws.on('pong', () => { ws._isAlive = true; });
-});
-
-// ─── Keepalive — send data to client to prevent proxy idle kill ────
-// Railway's proxy has a ~30s read timeout. The SERVER must send data
-// to the client (not the other way around) to keep the proxy alive.
-// Sends a keepalive frame every 20s and checks client liveness.
-const keepaliveInterval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws._isAlive === false) {
-      console.log(`[WS] Keepalive timeout, terminating connection`);
-      return ws.terminate();
-    }
-    ws._isAlive = false;
-    // Send a keepalive frame to the client — this resets the proxy read timeout
-    sendFrame(ws, 'keepalive', { t: Date.now() });
-  });
-}, 20000);
-wss.on('close', () => clearInterval(keepaliveInterval));
-
-// ─── Command Handler ────────────────────────────────────────────────
-async function handleCommand(ws, conn, payload) {
-  const command = (payload.data || '').trim();
-  if (!command) return sendFrame(ws, 'error', { message: 'Empty command.' });
-  if (command.length > 10000) return sendFrame(ws, 'error', { message: 'Command too long (max 10000 chars).' });
-
-  conn.processing = true;
-  const workdir = process.env.WORKDIR || path.join(__dirname, 'data', 'workspace');
-
-  console.log(`[CMD] ${conn.id}: ${command}`);
-
-  try {
-    const result = await runAgent(command, conn.session, {
-      onStatus:      (msg)  => sendFrame(ws, 'status', { message: msg }),
-      onCode:        (file, content) => sendFrame(ws, 'code', { filename: file, data: content }),
-      onText:        (msg)  => sendFrame(ws, 'text', { message: msg }),
-      onError:       (msg)  => sendFrame(ws, 'error', { message: msg }),
-      onTokenUpdate: (data) => sendFrame(ws, 'tokens', data),
-    }, workdir);
-
-    if (result) {
-      // Append new messages to session
-      conn.session.messages.push(...result.messages);
-      conn.session.tokenUsage.prompt += result.tokenUsage.prompt;
-      conn.session.tokenUsage.completion += result.tokenUsage.completion;
-      conn.session.tokenUsage.total += result.tokenUsage.total;
-      await sessions.saveSession(conn.session);
-
-      sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-    }
-  } catch (err) {
-    sendFrame(ws, 'error', { message: `Agent crashed: ${err.message}` });
-  } finally {
-    conn.processing = false;
-  }
-}
-
-// ─── Session Handlers ───────────────────────────────────────────────
-async function handleSessionList(ws) {
-  const list = await sessions.listSessions();
-  sendFrame(ws, 'session_list', { sessions: list });
-}
-
-async function handleSessionCreate(ws, conn, payload) {
-  const model = payload.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
-  const name = payload.name || null;
-  conn.session = sessions.createSession(name, model);
-  await sessions.saveSession(conn.session);
-  await sessions.setActiveSession(conn.session.id);
-  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-  sendFrame(ws, 'status', { message: `New session created (${model})` });
-}
-
-async function handleSessionLoad(ws, conn, payload) {
-  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
-  const loaded = await sessions.loadSession(payload.id);
-  if (!loaded) return sendFrame(ws, 'error', { message: 'Session not found.' });
-  conn.session = loaded;
-  await sessions.setActiveSession(loaded.id);
-  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-  sendFrame(ws, 'status', { message: `Loaded: ${loaded.name}` });
-
-  // Replay conversation history to client
-  for (const msg of loaded.messages) {
-    if (msg.role === 'user') {
-      sendFrame(ws, 'history', { role: 'user', content: msg.content });
-    } else if (msg.role === 'assistant' && msg.content) {
-      sendFrame(ws, 'history', { role: 'assistant', content: msg.content });
-    }
-  }
-}
-
-async function handleSessionDelete(ws, payload) {
-  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
-  await sessions.deleteSession(payload.id);
-  sendFrame(ws, 'status', { message: 'Session deleted.' });
-}
-
-async function handleSessionRename(ws, payload) {
-  if (!payload.id) return sendFrame(ws, 'error', { message: 'Missing session id.' });
-  if (!payload.name) return sendFrame(ws, 'error', { message: 'Missing new name.' });
-  const session = await sessions.loadSession(payload.id);
-  if (!session) return sendFrame(ws, 'error', { message: 'Session not found.' });
-  session.name = payload.name;
-  await sessions.saveSession(session);
-  sendFrame(ws, 'status', { message: `Renamed to "${payload.name}"` });
-  // Refresh session list
-  const list = await sessions.listSessions();
-  sendFrame(ws, 'session_list', { sessions: list });
-}
-
-async function handleModelSwitch(ws, conn, payload) {
-  if (!payload.model) return sendFrame(ws, 'error', { message: 'Missing model name.' });
-  const contextLen = sessions.getContextLength(payload.model);
-  conn.session.model = payload.model;
-  await sessions.saveSession(conn.session);
-  sendFrame(ws, 'session', sessions.getSessionStats(conn.session));
-  sendFrame(ws, 'status', { message: `Switched to ${payload.model} (${contextLen.toLocaleString()} token context)` });
-}
-
 // ─── Graceful Shutdown ──────────────────────────────────────────────
 function shutdown(signal) {
   console.log(`\n[SHUTDOWN] ${signal}`);
-  clearInterval(keepaliveInterval);
-  wss.clients.forEach((ws) => {
-    ws.send(JSON.stringify({ type: 'status', message: 'Server shutting down.' }));
-    ws.close(1001);
+  sseConnections.forEach((conn, id) => {
+    sendSSE(id, 'status', { message: 'Server shutting down.' });
+    try { conn.res.end(); } catch {}
   });
-  wss.close(() => server.close(() => process.exit(0)));
+  server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -474,14 +323,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ─── Start ──────────────────────────────────────────────────────────
 sessions.init().then(async () => {
-  // Clean up empty sessions on startup
   await sessions.cleanupEmptySessions();
-
   server.listen(PORT, () => {
     console.log(`\n🚀 Hermes Web UI Gateway`);
-    console.log(`   Port:      ${PORT}`);
-    console.log(`   Origin:    ${ALLOWED_ORIGIN}`);
-    console.log(`   Status:    http://localhost:${PORT}/health`);
-    console.log(`   WebSocket: ws://localhost:${PORT}\n`);
+    console.log(`   Port:   ${PORT}`);
+    console.log(`   Status: http://localhost:${PORT}/health`);
+    console.log(`   Mode:   HTTP/SSE\n`);
   });
 });
