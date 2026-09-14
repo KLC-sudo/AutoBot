@@ -265,10 +265,16 @@ function updateTokenDisplay(data) {
 }
 
 function updateSessionDisplay(data) {
+  const prevSessionId = currentSessionId;
   currentSessionId = data.sessionId;
 
   // Persist session ID for resume after reconnect/restart
   Auth.setSessionId(data.sessionId);
+
+  // Clear terminal when switching to a different session
+  if (prevSessionId && prevSessionId !== data.sessionId) {
+    Terminal.clear();
+  }
 
   document.getElementById('session-title').textContent = data.model || 'Session';
 
