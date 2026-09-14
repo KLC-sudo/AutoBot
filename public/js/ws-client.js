@@ -8,6 +8,7 @@ const WsClient = (() => {
   let reconnectTimer = null;
   let _token = null;
   let _intentionalClose = false;
+  let _keepaliveInterval = null;
 
   const MAX_RECONNECT_DELAY = 30000;
   const BASE_RECONNECT_DELAY = 1000;
@@ -25,9 +26,13 @@ const WsClient = (() => {
   }
 
   function connect(token) {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      ws.close();
+    // Close any existing connection before creating a new one
+    if (ws) {
+      try { ws.close(); } catch {}
+      ws = null;
     }
+    clearTimeout(reconnectTimer);
+    clearInterval(_keepaliveInterval);
 
     _token = token;
     _intentionalClose = false;
@@ -36,6 +41,12 @@ const WsClient = (() => {
   }
 
   function _doConnect() {
+    // Ensure old WS is cleaned up
+    if (ws) {
+      try { ws.close(); } catch {}
+      ws = null;
+    }
+
     updateConnectionStatus('connecting');
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -51,13 +62,11 @@ const WsClient = (() => {
 
     ws.onopen = () => {
       console.log('[WS] Socket open, sending auth...');
-      // Include sessionId if we have one (for session resume after reconnect)
+      // Clear sessionId on fresh connect to avoid resume loops
       const authPayload = { type: 'auth', token: _token };
-      const savedSessionId = Auth.getSessionId();
-      if (savedSessionId) {
-        authPayload.sessionId = savedSessionId;
-      }
       _send(authPayload);
+      // Start keepalive ping every 15 seconds to prevent mobile browser idle kills
+      _startKeepalive();
     };
 
     ws.onmessage = (event) => {
@@ -75,6 +84,7 @@ const WsClient = (() => {
     ws.onclose = (event) => {
       console.log(`[WS] Closed: code=${event.code}`);
       updateConnectionStatus('offline');
+      _stopKeepalive();
       _emit('disconnected', { code: event.code });
 
       if (!_intentionalClose) {
@@ -104,7 +114,27 @@ const WsClient = (() => {
   function disconnect() {
     _intentionalClose = true;
     clearTimeout(reconnectTimer);
-    if (ws) ws.close(1000, 'User disconnected');
+    _stopKeepalive();
+    if (ws) {
+      try { ws.close(1000, 'User disconnected'); } catch {}
+    }
+  }
+
+  // ─── Keepalive ping to prevent mobile browser idle kills ─────────
+  function _startKeepalive() {
+    _stopKeepalive();
+    _keepaliveInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
+      }
+    }, 15000);
+  }
+
+  function _stopKeepalive() {
+    if (_keepaliveInterval) {
+      clearInterval(_keepaliveInterval);
+      _keepaliveInterval = null;
+    }
   }
 
   function _handlePacket(packet) {
@@ -173,11 +203,21 @@ const WsClient = (() => {
         if (packet.role === 'user') Terminal.addUser(packet.content, true);
         else if (packet.role === 'assistant') Terminal.addAgent(packet.content, true);
         break;
+
+      case 'pong':
+        // Server pong received, connection is alive
+        break;
     }
   }
 
   function _scheduleReconnect() {
     reconnectAttempts++;
+    // Cap reconnect attempts to avoid infinite loop
+    if (reconnectAttempts > 20) {
+      console.error('[WS] Max reconnect attempts reached. Refreshing page...');
+      location.reload();
+      return;
+    }
     const delay = Math.min(
       BASE_RECONNECT_DELAY * Math.pow(1.5, reconnectAttempts - 1),
       MAX_RECONNECT_DELAY
@@ -190,15 +230,6 @@ const WsClient = (() => {
       hideReconnectBanner();
       _doConnect();
     }, delay);
-  }
-
-  // After successful reconnect, recover session state
-  function _recoverSession() {
-    if (!_token) return;
-    // Request session list and models after reconnect
-    setTimeout(() => {
-      _send({ type: 'session_list' });
-    }, 200);
   }
 
   function showReconnectBanner(seconds) {

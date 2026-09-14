@@ -282,6 +282,10 @@ wss.on('connection', (ws, request) => {
         });
         break;
 
+      case 'ping':
+        sendFrame(ws, 'pong', {});
+        break;
+
       default:
         sendFrame(ws, 'error', { message: `Unknown type: ${payload.type}` });
     }
