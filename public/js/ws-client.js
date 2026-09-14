@@ -62,10 +62,12 @@ const WsClient = (() => {
 
     ws.onopen = () => {
       console.log('[WS] Socket open, sending auth...');
-      // Clear sessionId on fresh connect to avoid resume loops
       const authPayload = { type: 'auth', token: _token };
+      const savedSessionId = Auth.getSessionId();
+      if (savedSessionId) {
+        authPayload.sessionId = savedSessionId;
+      }
       _send(authPayload);
-      // Start keepalive ping every 15 seconds to prevent mobile browser idle kills
       _startKeepalive();
     };
 

@@ -310,13 +310,16 @@ wss.on('connection', (ws, request) => {
 });
 
 // ─── Heartbeat ──────────────────────────────────────────────────────
+// Interval is 120s because Railway's proxy can interfere with WS ping/pong.
+// Client sends keepalive every 15s (application-level), server just
+// checks if connections are still alive on a long interval.
 const heartbeatInterval = setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws._isAlive === false) return ws.terminate();
     ws._isAlive = false;
     ws.ping();
   });
-}, 30000);
+}, 120000);
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 // ─── Command Handler ────────────────────────────────────────────────
