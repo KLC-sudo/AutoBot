@@ -115,11 +115,15 @@ const WsClient = (() => {
     switch (packet.type) {
       case 'auth_success':
         console.log('[HTTP] Ready:', packet.connectionId);
-        Auth.setToken(_token);
-        setLoginLoading(false);
-        updateConnectionStatus('online');
-        showDashboard();
-        Terminal.addSystem(packet.message);
+        try {
+          Auth.setToken(_token);
+          setLoginLoading(false);
+          updateConnectionStatus('online');
+          showDashboard();
+          Terminal.addSystem(packet.message);
+        } catch (err) {
+          console.error('[HTTP] auth_success handler error:', err);
+        }
         break;
 
       case 'error':

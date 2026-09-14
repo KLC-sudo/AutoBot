@@ -98,11 +98,21 @@ function setLoginLoading(loading) {
 
 /* ─── Dashboard Transitions ─────────────────────────────────────── */
 function showDashboard() {
-  document.getElementById('login-overlay').classList.add('hidden');
-  document.getElementById('dashboard').classList.remove('hidden');
-  document.getElementById('cmd-input').disabled = false;
-  document.getElementById('send-btn').disabled = false;
-  document.getElementById('cmd-input').focus();
+  console.log('[UI] showDashboard() called');
+  try {
+    const overlay = document.getElementById('login-overlay');
+    const dashboard = document.getElementById('dashboard');
+    const cmdInput = document.getElementById('cmd-input');
+    const sendBtn = document.getElementById('send-btn');
+    console.log('[UI] Elements:', { overlay: !!overlay, dashboard: !!dashboard, cmdInput: !!cmdInput, sendBtn: !!sendBtn });
+    if (overlay) overlay.classList.add('hidden');
+    if (dashboard) dashboard.classList.remove('hidden');
+    if (cmdInput) { cmdInput.disabled = false; cmdInput.focus(); }
+    if (sendBtn) sendBtn.disabled = false;
+    console.log('[UI] showDashboard() complete');
+  } catch (err) {
+    console.error('[UI] showDashboard() error:', err);
+  }
 }
 
 function showLogin() {
