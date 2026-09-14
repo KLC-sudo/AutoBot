@@ -220,6 +220,7 @@ function getSessionStats(session) {
 
   return {
     sessionId: session.id,
+    name: session.name,
     model: session.model,
     contextLength,
     messagesTokenEstimate: messagesTokens,

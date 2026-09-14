@@ -138,6 +138,12 @@ const WsClient = (() => {
 
       case 'status':
         Terminal.addStatus(packet.message);
+        if (typeof showToast === 'function') {
+          const msg = packet.message || '';
+          if (msg.includes('created')) showToast(msg, 'create');
+          else if (msg.includes('deleted')) showToast(msg, 'delete');
+          else if (msg.includes('Renamed') || msg.includes('Loaded')) showToast(msg, 'rename');
+        }
         break;
 
       case 'text':

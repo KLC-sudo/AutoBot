@@ -346,28 +346,79 @@ html, body {
 .session-item {
   padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer;
   transition: background 0.15s; margin-bottom: 2px; position: relative;
+  animation: sessionSlideIn 0.2s ease-out both;
+}
+@keyframes sessionSlideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 .session-item:hover { background: var(--bg-elevated); }
 .session-item.active { background: var(--accent-dim); border: 1px solid var(--accent-border); }
 
 .session-item-name {
   font-size: 12px; font-family: var(--font-sans); color: var(--text-primary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 24px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 48px;
 }
 
 .session-item-meta { font-size: 10px; color: var(--text-muted); margin-top: 3px; display: flex; gap: 8px; }
 
-.session-item-delete {
-  position: absolute; top: 10px; right: 10px; background: none; border: none;
-  color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px;
-  border-radius: 3px; line-height: 1; opacity: 0; transition: opacity 0.15s;
+.session-item-actions {
+  position: absolute; top: 8px; right: 8px; display: flex; gap: 2px;
+  opacity: 0; transition: opacity 0.15s;
 }
-.session-item:hover .session-item-delete { opacity: 1; }
-.session-item-delete:hover { color: var(--error); }
+.session-item:hover .session-item-actions { opacity: 1; }
 
-/* Touch: always show delete */
+.session-item-edit, .session-item-delete {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 13px; padding: 2px 5px; border-radius: 3px; line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.session-item-edit:hover { color: var(--accent); background: var(--accent-dim); }
+.session-item-delete:hover { color: var(--error); background: rgba(239,68,68,0.1); }
+
+/* Delete animation */
+.session-item-deleting {
+  animation: sessionDelete 0.3s ease-in forwards;
+}
+@keyframes sessionDelete {
+  0% { opacity: 1; transform: translateX(0); max-height: 80px; margin-bottom: 2px; }
+  50% { opacity: 0; transform: translateX(20px); }
+  100% { opacity: 0; transform: translateX(20px); max-height: 0; margin-bottom: 0; padding: 0 12px; overflow: hidden; }
+}
+
+/* Rename flash */
+.session-item-renaming {
+  animation: sessionRename 0.4s ease-out;
+}
+@keyframes sessionRename {
+  0% { background: var(--accent-dim); }
+  100% { background: transparent; }
+}
+
+/* Status toast */
+.status-toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  color: var(--text-primary); padding: 8px 16px; border-radius: var(--radius);
+  font-size: 12px; font-family: var(--font-sans); z-index: 200;
+  animation: toastIn 0.3s ease-out, toastOut 0.3s ease-in 1.7s forwards;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.status-toast.toast-delete { border-color: var(--error); }
+.status-toast.toast-create { border-color: var(--success); }
+.status-toast.toast-rename { border-color: var(--accent); }
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes toastOut {
+  from { opacity: 1; }
+  to { opacity: 0; pointer-events: none; }
+}
+
+/* Touch: always show action buttons */
 @media (hover: none) {
-  .session-item-delete { opacity: 1; }
+  .session-item-actions { opacity: 1; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════

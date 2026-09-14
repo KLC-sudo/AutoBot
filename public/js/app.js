@@ -96,7 +96,17 @@ const CodeViewer = (() => {
     document.getElementById('code-filename').textContent = `Diff: ${filename}`;
   }
 
-  function _esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+function _esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+function showToast(message, type = '') {
+  const existing = document.querySelector('.status-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = `status-toast ${type ? 'toast-' + type : ''}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2200);
+}
 
   return { showFile, showDiff };
 })();
@@ -158,16 +168,20 @@ function renderSessionList(sessions) {
     return;
   }
 
-  sessions.forEach(s => {
+  sessions.forEach((s, i) => {
     const el = document.createElement('div');
     el.className = `session-item${s.id === currentSessionId ? ' active' : ''}`;
+    el.style.animationDelay = `${i * 30}ms`;
 
     const date = new Date(s.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const tokens = s.tokenUsage?.total ? `${s.tokenUsage.total.toLocaleString()} tok` : '0 tok';
 
     el.innerHTML = `
-      <button class="session-item-delete" data-id="${s.id}" title="Delete">×</button>
-      <div class="session-item-name" title="Double-click to rename">${_esc(s.name || 'Untitled')}</div>
+      <div class="session-item-actions">
+        <button class="session-item-edit" data-id="${s.id}" title="Rename">✎</button>
+        <button class="session-item-delete" data-id="${s.id}" title="Delete">×</button>
+      </div>
+      <div class="session-item-name">${_esc(s.name || 'Untitled')}</div>
       <div class="session-item-meta">
         <span>${s.model?.split('/').pop() || '?'}</span>
         <span>${tokens}</span>
@@ -175,72 +189,68 @@ function renderSessionList(sessions) {
       </div>
     `;
 
+    // Click to load session
     el.addEventListener('click', (e) => {
-      if (e.target.classList.contains('session-item-delete')) return;
-      if (e.target.classList.contains('session-item-name') && e.detail === 2) return;
-      // Load session first, then close sidebar on mobile
+      if (e.target.closest('.session-item-edit') || e.target.closest('.session-item-delete')) return;
       WsClient.send('session_load', { id: s.id });
       currentSessionId = s.id;
-      // Update active state immediately
       document.querySelectorAll('.session-item').forEach(item => item.classList.remove('active'));
       el.classList.add('active');
-      if (isMobile()) {
-        setTimeout(() => closeSidebar(), 150);
-      }
+      if (isMobile()) setTimeout(() => closeSidebar(), 150);
     });
 
-    // Double-click name to rename
-    el.querySelector('.session-item-name').addEventListener('dblclick', (e) => {
+    // Edit button → rename
+    el.querySelector('.session-item-edit').addEventListener('click', (e) => {
       e.stopPropagation();
-      e.preventDefault();
-      const nameEl = e.target;
-      const currentName = s.name || '';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = currentName;
-      input.className = 'session-rename-input';
-      input.style.cssText = 'width:100%;background:var(--bg-input);border:1px solid var(--accent);color:var(--text-primary);padding:2px 4px;border-radius:3px;font-size:12px;font-family:var(--font-sans);outline:none;';
-      nameEl.replaceWith(input);
-      input.focus();
-      input.select();
-
-      let saved = false;
-      const save = () => {
-        if (saved) return;
-        saved = true;
-        const newName = input.value.trim() || currentName;
-        if (newName !== currentName) {
-          WsClient.send('session_rename', { id: s.id, name: newName });
-        }
-        const newNameEl = document.createElement('div');
-        newNameEl.className = 'session-item-name';
-        newNameEl.title = 'Double-click to rename';
-        newNameEl.textContent = newName || 'Untitled';
-        input.replaceWith(newNameEl);
-        // Re-attach double-click listener to new element
-        newNameEl.addEventListener('dblclick', (ev) => {
-          ev.stopPropagation();
-          ev.preventDefault();
-          // Trigger rename on the new element
-          newNameEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-        });
-      };
-
-      input.addEventListener('blur', save);
-      input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') { ev.preventDefault(); save(); }
-        if (ev.key === 'Escape') { saved = true; input.replaceWith(nameEl); }
-      });
+      startRename(el, s);
     });
 
+    // Delete button
     el.querySelector('.session-item-delete').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Delete this session?')) {
+      el.classList.add('session-item-deleting');
+      el.addEventListener('animationend', () => {
         WsClient.send('session_delete', { id: s.id });
-      }
+      }, { once: true });
     });
 
     list.appendChild(el);
+  });
+}
+
+function startRename(el, s) {
+  const nameEl = el.querySelector('.session-item-name');
+  const currentName = s.name || '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = currentName;
+  input.className = 'session-rename-input';
+  input.style.cssText = 'width:100%;background:var(--bg-input);border:1px solid var(--accent);color:var(--text-primary);padding:2px 4px;border-radius:3px;font-size:12px;font-family:var(--font-sans);outline:none;';
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let saved = false;
+  const save = () => {
+    if (saved) return;
+    saved = true;
+    const newName = input.value.trim() || currentName;
+    if (newName !== currentName) {
+      WsClient.send('session_rename', { id: s.id, name: newName });
+      s.name = newName;
+      el.classList.add('session-item-renaming');
+      el.addEventListener('animationend', () => el.classList.remove('session-item-renaming'), { once: true });
+    }
+    const newNameEl = document.createElement('div');
+    newNameEl.className = 'session-item-name';
+    newNameEl.textContent = newName || 'Untitled';
+    input.replaceWith(newNameEl);
+  };
+
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+    if (ev.key === 'Escape') { saved = true; const n = document.createElement('div'); n.className = 'session-item-name'; n.textContent = currentName || 'Untitled'; input.replaceWith(n); }
   });
 }
 
@@ -276,7 +286,7 @@ function updateSessionDisplay(data) {
     Terminal.clear();
   }
 
-  document.getElementById('session-title').textContent = data.model || 'Session';
+  document.getElementById('session-title').textContent = data.name || data.model || 'Session';
 
   // Update token display from session stats
   if (data.contextLength) {
