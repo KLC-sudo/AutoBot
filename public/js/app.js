@@ -411,7 +411,18 @@ document.addEventListener('DOMContentLoaded', () => {
   WsClient.on('modelsList', (pkt) => populateModels(pkt.models || []));
   WsClient.on('disconnected', () => { currentSessionId = null; });
 
-  // Set initial sidebar state
+  // Debug panel — triple-tap connection status indicator
+  const statusDots = document.getElementById('conn-indicator');
+  if (statusDots) {
+    let _tapCount = 0;
+    let _tapTimer = null;
+    statusDots.addEventListener('click', () => {
+      _tapCount++;
+      clearTimeout(_tapTimer);
+      _tapTimer = setTimeout(() => _tapCount = 0, 500);
+      if (_tapCount >= 3) { _tapCount = 0; if (typeof Debug !== 'undefined') Debug.toggle(); }
+    });
+  }
   const sidebar = document.getElementById('sidebar');
   const hamburger = document.getElementById('show-sidebar-btn');
   if (isMobile()) {

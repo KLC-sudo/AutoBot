@@ -198,5 +198,5 @@ const WsClient = (() => {
 
   function isConnected() { return _polling && !!_connectionId; }
 
-  return { connect, send, sendCommand, disconnect, isConnected, on };
+  return { connect, send, sendCommand, disconnect, isConnected, on, getConnectionId: () => _connectionId };
 })();

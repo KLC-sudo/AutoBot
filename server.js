@@ -57,13 +57,31 @@ app.use((req, res, next) => {
 app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
 // ─── Connection State ───────────────────────────────────────────────
-// Each "connection" is a polling client. Has a message queue.
-const conns = new Map(); // id -> { session, processing, queue: [{type, ...data}], lastPoll }
+const conns = new Map();
+const LOG_BUFFER_SIZE = 200;
+const logBuffer = [];
+const startTime = Date.now();
+
+function serverLog(level, msg) {
+  const entry = { t: Date.now(), level, msg };
+  logBuffer.push(entry);
+  if (logBuffer.length > LOG_BUFFER_SIZE) logBuffer.shift();
+  const prefix = { info: '●', warn: '⚠', error: '✖', debug: '○' }[level] || '●';
+  console.log(`[${prefix}] ${msg}`);
+}
 
 function enqueue(connId, type, data) {
   const conn = conns.get(connId);
   if (conn) conn.queue.push({ type, ...data });
 }
+
+// Intercept console to capture server logs
+const _origLog = console.log;
+const _origError = console.error;
+const _origWarn = console.warn;
+console.log = (...args) => { _origLog(...args); serverLog('info', args.join(' ')); };
+console.error = (...args) => { _origError(...args); serverLog('error', args.join(' ')); };
+console.warn = (...args) => { _origWarn(...args); serverLog('warn', args.join(' ')); };
 
 // ─── POST /api/auth — login, get connection ID ──────────────────────
 app.post('/api/auth', async (req, res) => {
@@ -256,6 +274,36 @@ setInterval(() => {
     }
   });
 }, 60000);
+
+// ─── GET /api/logs — fetch buffered server logs ─────────────────────
+app.get('/api/logs', (req, res) => {
+  const connId = req.query.cid;
+  if (!connId || !conns.has(connId)) return res.status(401).json({ error: 'No connection.' });
+  const since = parseInt(req.query.since, 10) || 0;
+  const entries = since ? logBuffer.filter(e => e.t > since) : logBuffer;
+  res.json({ logs: entries });
+});
+
+// ─── GET /api/diag — server diagnostics ─────────────────────────────
+app.get('/api/diag', (req, res) => {
+  const connId = req.query.cid;
+  if (!connId || !conns.has(connId)) return res.status(401).json({ error: 'No connection.' });
+  const conn = conns.get(connId);
+  const mem = process.memoryUsage();
+  res.json({
+    uptime: Math.round((Date.now() - startTime) / 1000),
+    memoryMB: Math.round(mem.rss / 1048576),
+    heapMB: Math.round(mem.heapUsed / 1048576),
+    activeConnections: conns.size,
+    queueDepth: conn.queue.length,
+    processing: conn.processing,
+    sessionId: conn.session?.id || null,
+    sessionModel: conn.session?.model || null,
+    messageCount: conn.session?.messages?.length || 0,
+    tokenUsage: conn.session?.tokenUsage || { prompt: 0, completion: 0, total: 0 },
+    logBufferSize: logBuffer.length,
+  });
+});
 
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
