@@ -133,6 +133,7 @@ const WsClient = (() => {
           _intentionalClose = true;
         } else {
           Terminal.addError(packet.message);
+          _emit('agentDone', packet);
         }
         break;
 
@@ -148,6 +149,9 @@ const WsClient = (() => {
 
       case 'text':
         Terminal.addAgent(packet.message);
+        break;
+
+      case 'agent_done':
         _emit('agentDone', packet);
         break;
 

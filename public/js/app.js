@@ -200,9 +200,10 @@ function setProcessing(processing) {
   } else {
     sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
     sendBtn.className = 'btn-send';
-    sendBtn.disabled = !input.value.trim() || !WsClient.isConnected();
+    sendBtn.disabled = false;
     sendBtn.title = 'Send (Enter)';
     sendBtn.onclick = null;
+    input.focus();
   }
 }
 

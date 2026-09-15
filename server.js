@@ -211,7 +211,10 @@ app.post('/api/send', async (req, res) => {
         }).catch(err => {
           enqueue(connId, 'error', { message: `Agent crashed: ${err.message}` });
           serverLog('error', `Agent crash: ${err.message}`);
-        }).finally(() => { conn.processing = false; });
+        }).finally(() => {
+          conn.processing = false;
+          enqueue(connId, 'agent_done', { message: 'Agent finished.' });
+        });
         return;
       }
 
@@ -509,31 +512,32 @@ app.get('/api/railway/logs', requireRailway, async (req, res) => {
   const limit = Math.min(parseInt(req.query.lines, 10) || 200, 1000);
   if (!serviceId) return res.status(400).json({ error: 'Missing service param.' });
   try {
-    // Get latest deployment for this service
+    // Get latest deployment (any status) for this service
     const deployData = await railwayQuery(`query ($serviceId: String!) {
       deployments(input: { serviceId: $serviceId }, first: 1) {
-        edges { node { id } }
+        edges { node { id status createdAt } }
       }
     }`, { serviceId });
 
     const edges = deployData.deployments?.edges;
-    if (!edges?.length) return res.json({ logs: [] });
+    if (!edges?.length) return res.json({ logs: [], deployment: null });
 
-    const deploymentId = edges[0].node.id;
+    const deployment = edges[0].node;
+    serverLog('info', `Fetching logs for deployment ${deployment.id.substring(0, 8)} (status: ${deployment.status})`);
 
     // Get logs for that deployment
     const logData = await railwayQuery(`query ($id: String!, $limit: Int) {
       deploymentLogs(deploymentId: $id, limit: $limit) {
         timestamp message severity
       }
-    }`, { id: deploymentId, limit });
+    }`, { id: deployment.id, limit });
 
     const logs = (logData.deploymentLogs || []).map(l => ({
       timestamp: l.timestamp,
       text: l.message,
       source: l.severity || 'default',
     }));
-    res.json({ logs });
+    res.json({ logs, deployment: { id: deployment.id, status: deployment.status, createdAt: deployment.createdAt } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

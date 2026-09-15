@@ -915,7 +915,8 @@ async function runAgent(userMessage, session, callbacks, workdir, connId) {
   ];
 
   const contextLength = await fetchContextLength(model, apiKey);
-  const MAX_ITERATIONS = 15;
+  const MAX_ITERATIONS = 25;
+  const CONTEXT_WARN_PERCENT = 75;
   let iteration = 0;
   let totalUsage = { prompt: 0, completion: 0, total: 0 };
 
@@ -940,12 +941,56 @@ async function runAgent(userMessage, session, callbacks, workdir, connId) {
   messages.push(...cleanMessages);
   messages.push({ role: 'user', content: userMessage });
 
+  // Helper: estimate context usage and truncate if needed
+  function _estimateContextUsage() {
+    let tokens = 0;
+    for (const m of messages) {
+      if (m.content) tokens += Math.ceil(m.content.length / 4);
+      if (m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          tokens += Math.ceil((tc.function?.arguments || '').length / 4);
+        }
+      }
+    }
+    return tokens;
+  }
+
+  function _truncateOldMessages() {
+    const used = _estimateContextUsage();
+    const percent = (used / contextLength) * 100;
+    if (percent < CONTEXT_WARN_PERCENT) return false;
+
+    // Keep: system prompt (index 0), last user message, last 6 messages (3 exchanges)
+    const KEEP_TAIL = 6;
+    if (messages.length <= KEEP_TAIL + 2) return false;
+
+    const systemMsg = messages[0];
+    const keptMessages = messages.slice(-(KEEP_TAIL));
+    const truncatedCount = messages.length - KEEP_TAIL - 1;
+
+    messages.length = 0;
+    messages.push(systemMsg);
+    messages.push({ role: 'user', content: `[Context truncated: ${truncatedCount} older messages removed to free space]` });
+    messages.push(...keptMessages);
+
+    onStatus(`Context truncated (${Math.round(percent)}% used) — keeping recent messages`);
+    return true;
+  }
+
   while (iteration < MAX_ITERATIONS) {
     if (signal?.aborted) {
       onStatus('Cancelled by user.');
       return null;
     }
     iteration++;
+
+    // Truncate old messages if context is getting full
+    if (iteration > 3) _truncateOldMessages();
+
+    // Warn when approaching max iterations
+    if (iteration === MAX_ITERATIONS - 3) {
+      onStatus(`Approaching step limit (${MAX_ITERATIONS}). Finish up soon.`);
+    }
 
     try {
       onStatus(`Thinking... (step ${iteration})`);
@@ -1071,8 +1116,8 @@ async function runAgent(userMessage, session, callbacks, workdir, connId) {
   }
 
   // Max iterations reached — summarize
-  onStatus('Max steps reached. Summarizing...');
-  messages.push({ role: 'user', content: 'You reached the max steps. Briefly summarize what you accomplished.' });
+  onStatus('Max steps reached. Summarizing what was done...');
+  messages.push({ role: 'user', content: 'You reached the max steps limit. Briefly summarize what you accomplished and what remains to be done. Be concise — just the facts.' });
 
   try {
     const finalResponse = await fetch(OPENROUTER_API, {
