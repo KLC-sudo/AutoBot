@@ -79,6 +79,7 @@ const Debug = (() => {
         <div class="railway-actions">
           <span class="railway-actions-label">Quick Actions:</span>
           <button class="debug-btn rw-action" id="rw-redeploy" title="Redeploy current service">🚀 Redeploy</button>
+          <button class="debug-btn rw-action" id="rw-health" title="Check service health and recent logs">🩺 Health</button>
           <button class="debug-btn rw-action" id="rw-add-pg" title="Add PostgreSQL database">🐘 +Postgres</button>
           <button class="debug-btn rw-action" id="rw-add-redis" title="Add Redis">🔴 +Redis</button>
           <button class="debug-btn rw-action" id="rw-add-mysql" title="Add MySQL">🐬 +MySQL</button>
@@ -128,6 +129,7 @@ const Debug = (() => {
       if (e.key === 'Enter') _lookupProject();
     });
     document.getElementById('rw-redeploy').onclick = _redeployService;
+    document.getElementById('rw-health').onclick = _checkHealth;
     document.getElementById('rw-add-pg').onclick = () => _createDatabase('PostgreSQL', 'postgres');
     document.getElementById('rw-add-redis').onclick = () => _createDatabase('Redis', 'redis');
     document.getElementById('rw-add-mysql').onclick = () => _createDatabase('MySQL', 'mysql');
@@ -440,6 +442,52 @@ const Debug = (() => {
       const data = await res.json();
       if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
       statusEl.textContent = `Redeploy triggered (ID: ${data.deploymentId})`;
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
+  }
+
+  async function _checkHealth() {
+    const serviceId = document.getElementById('rw-service').value;
+    const statusEl = document.getElementById('rw-status');
+    const logEl = document.getElementById('rw-log');
+    if (!serviceId) { statusEl.textContent = 'Select a service first'; return; }
+    statusEl.textContent = 'Checking health...';
+    logEl.innerHTML = '';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/health?service=${serviceId}&cid=${cid}`);
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+
+      const icon = data.healthy ? '✅' : data.crashed ? '❌' : '⚠️';
+      statusEl.textContent = `${icon} ${data.status} | deployed ${data.timeAgo} (${data.deployedAt})`;
+
+      // Show recent logs
+      if (data.recentLogs?.length) {
+        const header = document.createElement('div');
+        header.className = 'debug-entry debug-info';
+        header.innerHTML = `<span style="color:var(--accent);font-weight:600">Recent logs (${data.recentLogs.length}):</span>`;
+        logEl.appendChild(header);
+        data.recentLogs.forEach(line => {
+          const el = document.createElement('div');
+          el.className = 'debug-entry debug-info';
+          el.textContent = line;
+          logEl.appendChild(el);
+        });
+      }
+
+      if (data.url) {
+        const urlEl = document.createElement('div');
+        urlEl.className = 'debug-entry debug-info';
+        urlEl.innerHTML = `<span style="color:var(--info)">URL: ${data.url}</span>`;
+        logEl.appendChild(urlEl);
+      }
+
+      if (data.crashed) {
+        const crashEl = document.createElement('div');
+        crashEl.className = 'debug-entry debug-error';
+        crashEl.innerHTML = `<span style="font-weight:600">⚠ Service is ${data.status}. Check logs above for errors. Click "🚀 Redeploy" to restart.</span>`;
+        logEl.appendChild(crashEl);
+      }
     } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
   }
 

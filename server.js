@@ -484,7 +484,7 @@ app.get('/api/railway/logs', requireRailway, async (req, res) => {
     }));
 
     // Calculate time ago for the deployment
-    const depTime = new Date(parseInt(deployment.createdAt));
+    const depTime = new Date(deployment.createdAt);
     const timeAgo = _timeAgo(depTime);
 
     res.json({
@@ -512,6 +512,49 @@ function _timeAgo(date) {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
+// GET /api/railway/health?service=<id> — check service health + latest logs
+app.get('/api/railway/health', requireRailway, async (req, res) => {
+  const serviceId = req.query.service;
+  if (!serviceId) return res.status(400).json({ error: 'Missing service param.' });
+  try {
+    // Get latest deployment with full status
+    const deployData = await railwayQuery(`query ($serviceId: String!) {
+      deployments(input: { serviceId: $serviceId }, first: 1) {
+        edges { node { id status createdAt url staticUrl } }
+      }
+    }`, { serviceId });
+
+    const edges = deployData.deployments?.edges;
+    if (!edges?.length) return res.json({ healthy: false, error: 'No deployments found' });
+
+    const deployment = edges[0].node;
+    const depTime = new Date(deployment.createdAt);
+    const isHealthy = deployment.status === 'SUCCESS';
+    const isCrashed = deployment.status === 'CRASHED' || deployment.status === 'FAILED';
+
+    // Get last 20 log lines for quick diagnosis
+    const logData = await railwayQuery(`query ($id: String!) {
+      deploymentLogs(deploymentId: $id, limit: 20) {
+        timestamp message severity
+      }
+    }`, { id: deployment.id });
+
+    const recentLogs = (logData.deploymentLogs || []).map(l => l.message);
+
+    res.json({
+      healthy: isHealthy,
+      crashed: isCrashed,
+      status: deployment.status,
+      timeAgo: _timeAgo(depTime),
+      deployedAt: depTime.toLocaleString(),
+      url: deployment.url || deployment.staticUrl,
+      recentLogs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─── Railway Management Mutations ─────────────────────────────────
 
