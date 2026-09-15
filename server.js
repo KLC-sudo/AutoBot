@@ -199,7 +199,7 @@ app.post('/api/send', async (req, res) => {
           onError:       (msg)  => enqueue(connId, 'error', { message: msg }),
           onTokenUpdate: (d)    => enqueue(connId, 'tokens', d),
           signal:        conn._abortController.signal,
-        }, workdir).then(async (result) => {
+        }, workdir, connId).then(async (result) => {
           if (result) {
             conn.session.messages.push(...result.messages);
             conn.session.tokenUsage.prompt += result.tokenUsage.prompt;
@@ -344,8 +344,10 @@ async function railwayQuery(query, variables = {}) {
 
 function requireRailway(req, res, next) {
   if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'Neither RAILWAY_API_TOKEN nor RAILWAY_TOKEN is set.' });
+  // Allow internal requests from the agent (no connection ID needed)
   const connId = req.query.cid || req.headers['x-connection-id'];
-  if (!connId || !conns.has(connId)) return res.status(401).json({ error: 'No connection.' });
+  const isInternal = req.headers['x-internal-request'] === 'true';
+  if (!isInternal && (!connId || !conns.has(connId))) return res.status(401).json({ error: 'No connection.' });
   next();
 }
 
@@ -478,6 +480,226 @@ app.get('/api/railway/logs', requireRailway, async (req, res) => {
       source: l.severity || 'default',
     }));
     res.json({ logs });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Railway Management Mutations ─────────────────────────────────
+
+// POST /api/railway/mutate — generic Railway mutation proxy
+app.post('/api/railway/mutate', requireRailway, async (req, res) => {
+  const { query, variables } = req.body;
+  if (!query) return res.status(400).json({ error: 'Missing query.' });
+  try {
+    serverLog('info', `Railway mutation: ${query.substring(0, 80)}`);
+    const data = await railwayQuery(query, variables);
+    res.json(data);
+  } catch (err) {
+    serverLog('error', `Railway mutation error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/service/create — create a new service (DB, empty, Docker image)
+app.post('/api/railway/service/create', requireRailway, async (req, res) => {
+  const { projectId, name, source, variables: vars, icon } = req.body;
+  if (!projectId || !name) return res.status(400).json({ error: 'Missing projectId or name.' });
+  try {
+    const input = { projectId, name };
+    if (source) input.source = source;
+    if (vars) input.variables = vars;
+    if (icon) input.icon = icon;
+
+    const data = await railwayQuery(`mutation serviceCreate($input: ServiceCreateInput!) {
+      serviceCreate(input: $input) { id name }
+    }`, { input });
+    serverLog('info', `Created service: ${name} (${data.serviceCreate.id})`);
+    res.json(data.serviceCreate);
+  } catch (err) {
+    serverLog('error', `Service create error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/railway/service/:id — delete a service
+app.delete('/api/railway/service/:id', requireRailway, async (req, res) => {
+  try {
+    await railwayQuery(`mutation serviceDelete($id: String!) { serviceDelete(id: $id) }`, { id: req.params.id });
+    serverLog('info', `Deleted service: ${req.params.id}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/deploy — trigger deployment for a service
+app.post('/api/railway/deploy', requireRailway, async (req, res) => {
+  const { serviceId, environmentId, commitSha } = req.body;
+  if (!serviceId || !environmentId) return res.status(400).json({ error: 'Missing serviceId or environmentId.' });
+  try {
+    let query, vars;
+    if (commitSha) {
+      query = `mutation deploy($serviceId: String!, $environmentId: String!, $commitSha: String!) {
+        serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId, commitSha: $commitSha)
+      }`;
+      vars = { serviceId, environmentId, commitSha };
+    } else {
+      query = `mutation deploy($serviceId: String!, $environmentId: String!) {
+        serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId)
+      }`;
+      vars = { serviceId, environmentId };
+    }
+    const data = await railwayQuery(query, vars);
+    serverLog('info', `Deploy triggered for service ${serviceId}`);
+    res.json({ deploymentId: data.serviceInstanceDeployV2 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/redeploy — redeploy current commit
+app.post('/api/railway/redeploy', requireRailway, async (req, res) => {
+  const { serviceId, environmentId } = req.body;
+  if (!serviceId || !environmentId) return res.status(400).json({ error: 'Missing serviceId or environmentId.' });
+  try {
+    const data = await railwayQuery(`mutation redeploy($serviceId: String!, $environmentId: String!) {
+      serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
+    }`, { serviceId, environmentId });
+    serverLog('info', `Redeploy triggered for service ${serviceId}`);
+    res.json({ deploymentId: data.serviceInstanceRedeploy });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/rollback — rollback to a previous deployment
+app.post('/api/railway/rollback', requireRailway, async (req, res) => {
+  const { deploymentId } = req.body;
+  if (!deploymentId) return res.status(400).json({ error: 'Missing deploymentId.' });
+  try {
+    const data = await railwayQuery(`mutation rollback($id: String!) {
+      deploymentRollback(id: $id) { id status }
+    }`, { id: deploymentId });
+    res.json(data.deploymentRollback);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/railway/vars?project=<id>&environment=<id>&service=<id> — get variables
+app.get('/api/railway/vars', requireRailway, async (req, res) => {
+  const { project, environment, service } = req.query;
+  if (!project || !environment) return res.status(400).json({ error: 'Missing project or environment.' });
+  try {
+    const vars = { projectId: project, environmentId: environment };
+    if (service) vars.serviceId = service;
+    const data = await railwayQuery(`query variables($projectId: String!, $environmentId: String!, $serviceId: String) {
+      variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId)
+    }`, vars);
+    res.json({ variables: data.variables || {} });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/vars/set — upsert variables
+app.post('/api/railway/vars/set', requireRailway, async (req, res) => {
+  const { projectId, environmentId, serviceId, variables: vars, skipDeploys } = req.body;
+  if (!projectId || !environmentId || !vars) return res.status(400).json({ error: 'Missing required fields.' });
+  try {
+    const input = { projectId, environmentId, variables: vars };
+    if (serviceId) input.serviceId = serviceId;
+    if (skipDeploys !== undefined) input.skipDeploys = skipDeploys;
+    await railwayQuery(`mutation variableCollectionUpsert($input: VariableCollectionUpsertInput!) {
+      variableCollectionUpsert(input: $input)
+    }`, { input });
+    serverLog('info', `Variables updated for project ${projectId}`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/railway/vars/delete — delete a variable
+app.delete('/api/railway/vars/delete', requireRailway, async (req, res) => {
+  const { projectId, environmentId, serviceId, name } = req.body;
+  if (!projectId || !environmentId || !name) return res.status(400).json({ error: 'Missing required fields.' });
+  try {
+    const input = { projectId, environmentId, name };
+    if (serviceId) input.serviceId = serviceId;
+    await railwayQuery(`mutation variableDelete($input: VariableDeleteInput!) {
+      variableDelete(input: $input)
+    }`, { input });
+    serverLog('info', `Variable "${name}" deleted`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/volume/create — create a volume
+app.post('/api/railway/volume/create', requireRailway, async (req, res) => {
+  const { projectId, serviceId, mountPath, environmentId, region } = req.body;
+  if (!projectId || !serviceId || !mountPath) return res.status(400).json({ error: 'Missing required fields.' });
+  try {
+    const input = { projectId, serviceId, mountPath };
+    if (environmentId) input.environmentId = environmentId;
+    if (region) input.region = region;
+    const data = await railwayQuery(`mutation volumeCreate($input: VolumeCreateInput!) {
+      volumeCreate(input: $input) { id name }
+    }`, { input });
+    serverLog('info', `Volume created: ${data.volumeCreate.name}`);
+    res.json(data.volumeCreate);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/railway/volumes?project=<id> — list volumes
+app.get('/api/railway/volumes', requireRailway, async (req, res) => {
+  const projectId = req.query.project;
+  if (!projectId) return res.status(400).json({ error: 'Missing project param.' });
+  try {
+    const data = await railwayQuery(`query project($id: String!) {
+      project(id: $id) {
+        volumes { edges { node { id name createdAt } } }
+      }
+    }`, { id: projectId });
+    res.json({ volumes: data.project?.volumes?.edges?.map(e => e.node) || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/railway/environments — list environments for a project
+app.post('/api/railway/environments', requireRailway, async (req, res) => {
+  const { projectId } = req.body;
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId.' });
+  try {
+    const data = await railwayQuery(`query project($id: String!) {
+      project(id: $id) {
+        environments { edges { node { id name } } }
+      }
+    }`, { id: projectId });
+    res.json({ environments: data.project?.environments?.edges?.map(e => e.node) || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/railway/service-instance?service=<id>&environment=<id> — get service instance details
+app.get('/api/railway/service-instance', requireRailway, async (req, res) => {
+  const { service, environment } = req.query;
+  if (!service || !environment) return res.status(400).json({ error: 'Missing service or environment.' });
+  try {
+    const data = await railwayQuery(`query serviceInstance($serviceId: String!, $environmentId: String!) {
+      serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {
+        id serviceName startCommand buildCommand rootDirectory region numReplicas
+        latestDeployment { id status createdAt url }
+      }
+    }`, { serviceId: service, environmentId: environment });
+    res.json(data.serviceInstance || {});
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

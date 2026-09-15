@@ -65,13 +65,24 @@ const Debug = (() => {
         <div class="railway-controls">
           <select id="rw-project" class="railway-select"><option value="">Loading projects...</option></select>
           <select id="rw-service" class="railway-select" disabled><option value="">Select project first</option></select>
-          <button class="debug-btn" id="rw-fetch">Fetch Logs</button>
+          <select id="rw-env" class="railway-select" disabled><option value="">Select service first</option></select>
+          <button class="debug-btn" id="rw-fetch">Logs</button>
           <button class="debug-btn" id="rw-check" title="Check token type">🔑</button>
           <select id="rw-lines" class="railway-select rw-lines">
-            <option value="100">100 lines</option>
-            <option value="200" selected>200 lines</option>
-            <option value="500">500 lines</option>
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
           </select>
+        </div>
+        <div class="railway-actions">
+          <span class="railway-actions-label">Quick Actions:</span>
+          <button class="debug-btn rw-action" id="rw-redeploy" title="Redeploy current service">🚀 Redeploy</button>
+          <button class="debug-btn rw-action" id="rw-add-pg" title="Add PostgreSQL database">🐘 +Postgres</button>
+          <button class="debug-btn rw-action" id="rw-add-redis" title="Add Redis">🔴 +Redis</button>
+          <button class="debug-btn rw-action" id="rw-add-mysql" title="Add MySQL">🐬 +MySQL</button>
+          <button class="debug-btn rw-action" id="rw-add-mongo" title="Add MongoDB">🍃 +Mongo</button>
+          <button class="debug-btn rw-action" id="rw-add-volume" title="Add persistent volume">💾 +Volume</button>
+          <button class="debug-btn rw-action" id="rw-view-vars" title="View environment variables">📋 Vars</button>
         </div>
         <div class="railway-status" id="rw-status"></div>
         <div class="debug-log" id="rw-log"></div>
@@ -106,9 +117,17 @@ const Debug = (() => {
     });
 
     // Railway controls
-    document.getElementById('rw-project').onchange = _loadServices;
+    document.getElementById('rw-project').onchange = () => { _loadServices(); _loadEnvironments(); };
+    document.getElementById('rw-service').onchange = _loadEnvironments;
     document.getElementById('rw-fetch').onclick = _fetchRailwayLogs;
     document.getElementById('rw-check').onclick = _checkToken;
+    document.getElementById('rw-redeploy').onclick = _redeployService;
+    document.getElementById('rw-add-pg').onclick = () => _createDatabase('PostgreSQL', 'postgres');
+    document.getElementById('rw-add-redis').onclick = () => _createDatabase('Redis', 'redis');
+    document.getElementById('rw-add-mysql').onclick = () => _createDatabase('MySQL', 'mysql');
+    document.getElementById('rw-add-mongo').onclick = () => _createDatabase('MongoDB', 'mongodb');
+    document.getElementById('rw-add-volume').onclick = _addVolume;
+    document.getElementById('rw-view-vars').onclick = _viewVariables;
     _loadProjects();
   }
 
@@ -313,6 +332,125 @@ const Debug = (() => {
     } catch (err) {
       statusEl.textContent = `Error: ${err.message}`;
     }
+  }
+
+  // ─── Load environments for selected project ────────────────────────
+  async function _loadEnvironments() {
+    const envSel = document.getElementById('rw-env');
+    const projectId = document.getElementById('rw-project').value;
+    if (!projectId) { envSel.disabled = true; envSel.innerHTML = '<option value="">Select project first</option>'; return; }
+    envSel.disabled = true;
+    envSel.innerHTML = '<option value="">Loading...</option>';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/environments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Connection-Id': cid },
+        body: JSON.stringify({ projectId }),
+      });
+      const data = await res.json();
+      if (data.error) { envSel.innerHTML = `<option value="">${data.error}</option>`; return; }
+      envSel.innerHTML = '<option value="">Select environment...</option>';
+      (data.environments || []).forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.id; opt.textContent = e.name;
+        envSel.appendChild(opt);
+      });
+      envSel.disabled = false;
+    } catch (err) {
+      envSel.innerHTML = `<option value="">Error: ${err.message}</option>`;
+    }
+  }
+
+  // ─── Quick Actions ─────────────────────────────────────────────────
+  async function _redeployService() {
+    const serviceId = document.getElementById('rw-service').value;
+    const envId = document.getElementById('rw-env').value;
+    const statusEl = document.getElementById('rw-status');
+    if (!serviceId || !envId) { statusEl.textContent = 'Select a service and environment first'; return; }
+    statusEl.textContent = 'Redeploying...';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/redeploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Connection-Id': cid },
+        body: JSON.stringify({ serviceId, environmentId: envId }),
+      });
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      statusEl.textContent = `Redeploy triggered (ID: ${data.deploymentId})`;
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
+  }
+
+  async function _createDatabase(name, type) {
+    const projectId = document.getElementById('rw-project').value;
+    const statusEl = document.getElementById('rw-status');
+    if (!projectId) { statusEl.textContent = 'Select a project first'; return; }
+    statusEl.textContent = `Creating ${name}...`;
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/service/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Connection-Id': cid },
+        body: JSON.stringify({ projectId, name, type }),
+      });
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      statusEl.textContent = `Created ${name} (ID: ${data.id})`;
+      _loadServices();
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
+  }
+
+  async function _addVolume() {
+    const projectId = document.getElementById('rw-project').value;
+    const serviceId = document.getElementById('rw-service').value;
+    const statusEl = document.getElementById('rw-status');
+    if (!projectId || !serviceId) { statusEl.textContent = 'Select a project and service first'; return; }
+    const mountPath = prompt('Mount path (e.g., /data):', '/data');
+    if (!mountPath) return;
+    statusEl.textContent = 'Creating volume...';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/volume/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Connection-Id': cid },
+        body: JSON.stringify({ projectId, serviceId, mountPath }),
+      });
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      statusEl.textContent = `Volume "${data.name}" created, mounted at ${mountPath}`;
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
+  }
+
+  async function _viewVariables() {
+    const projectId = document.getElementById('rw-project').value;
+    const envId = document.getElementById('rw-env').value;
+    const serviceId = document.getElementById('rw-service').value;
+    const logEl = document.getElementById('rw-log');
+    const statusEl = document.getElementById('rw-status');
+    if (!projectId || !envId) { statusEl.textContent = 'Select a project and environment first'; return; }
+    statusEl.textContent = 'Loading variables...';
+    logEl.innerHTML = '';
+    try {
+      const cid = WsClient.getConnectionId();
+      let url = `/api/railway/vars?project=${projectId}&environment=${envId}`;
+      if (serviceId) url += `&service=${serviceId}`;
+      const res = await fetch(url, { headers: { 'X-Connection-Id': cid } });
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      const vars = data.variables || {};
+      const keys = Object.keys(vars);
+      if (!keys.length) { statusEl.textContent = 'No variables found'; return; }
+      statusEl.textContent = `${keys.length} variable(s)`;
+      keys.sort().forEach(key => {
+        const val = vars[key];
+        const display = val.length > 60 ? val.substring(0, 60) + '...' : val;
+        const el = document.createElement('div');
+        el.className = 'debug-entry debug-info';
+        el.innerHTML = `<span style="color:var(--accent)">${_escHtml(key)}</span>=<span style="color:var(--text-muted)">${_escHtml(display)}</span>`;
+        logEl.appendChild(el);
+      });
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
   }
 
   // ─── Toggle panel ─────────────────────────────────────────────────

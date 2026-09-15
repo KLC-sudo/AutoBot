@@ -36,6 +36,7 @@ function getShell() {
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_MODELS_API = 'https://openrouter.ai/api/v1/models';
+const WORKDIR_BASE_URL = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
 
 // ─── Fetch actual context length from OpenRouter ───────────────────
 async function fetchContextLength(model, apiKey) {
@@ -94,6 +95,28 @@ You have full access to the workspace filesystem and shell. Your tools:
 - **clone_repo** — Clone a GitHub repo (private repos supported via stored token)
 - **git_push** — Stage, commit, and push changes to GitHub
 - **install_deps** — Install npm/yarn/pip dependencies
+
+## Railway Infrastructure Management
+You have full access to manage Railway infrastructure via API. Your Railway tools:
+- **railway_list_projects** — List all Railway projects
+- **railway_list_services** — List services in a project
+- **railway_list_environments** — List environments in a project
+- **railway_create_service** — Create databases (postgres, mysql, redis, mongodb), Docker services, or empty services
+- **railway_delete_service** — Delete a service
+- **railway_deploy** — Trigger a deployment
+- **railway_redeploy** — Redeploy current commit
+- **railway_get_variables** — Get environment variables
+- **railway_set_variables** — Set/update environment variables
+- **railway_create_volume** — Create a persistent volume
+- **railway_list_volumes** — List volumes in a project
+- **railway_get_logs** — Get deployment logs
+
+When users ask about Railway infrastructure (databases, volumes, deployments, variables), use these tools directly. Common patterns:
+- "Add a Postgres DB" → railway_create_service(type="postgres")
+- "Add persistent storage" → railway_create_volume()
+- "Set env vars" → railway_set_variables()
+- "Redeploy" → railway_redeploy()
+- "Check logs" → railway_get_logs()
 
 ## GitHub Access
 You have a GitHub token configured. You can:
@@ -234,6 +257,185 @@ const TOOLS = [
           manager: { type: 'string', description: 'Package manager: npm, yarn, pip (default: npm)' },
         },
         required: [],
+      },
+    },
+  },
+  // ─── Railway Management Tools ─────────────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'railway_list_projects',
+      description: 'List all Railway projects accessible with the current token',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_list_services',
+      description: 'List services in a Railway project',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+        },
+        required: ['projectId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_list_environments',
+      description: 'List environments in a Railway project',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+        },
+        required: ['projectId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_create_service',
+      description: 'Create a new service in a Railway project. Can create databases (PostgreSQL, MySQL, Redis, MongoDB), Docker images, or empty services.',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+          name: { type: 'string', description: 'Service name' },
+          type: { type: 'string', description: 'Service type: postgres, mysql, redis, mongodb, docker, empty' },
+          dockerImage: { type: 'string', description: 'Docker image (only if type=docker)' },
+          environmentVariables: { type: 'object', description: 'Initial environment variables as key-value pairs' },
+        },
+        required: ['projectId', 'name', 'type'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_delete_service',
+      description: 'Delete a Railway service permanently',
+      parameters: {
+        type: 'object',
+        properties: {
+          serviceId: { type: 'string', description: 'Service ID to delete' },
+        },
+        required: ['serviceId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_deploy',
+      description: 'Trigger a deployment for a Railway service',
+      parameters: {
+        type: 'object',
+        properties: {
+          serviceId: { type: 'string', description: 'Service ID' },
+          environmentId: { type: 'string', description: 'Environment ID' },
+          commitSha: { type: 'string', description: 'Specific commit SHA to deploy (optional)' },
+        },
+        required: ['serviceId', 'environmentId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_redeploy',
+      description: 'Redeploy the current commit for a Railway service',
+      parameters: {
+        type: 'object',
+        properties: {
+          serviceId: { type: 'string', description: 'Service ID' },
+          environmentId: { type: 'string', description: 'Environment ID' },
+        },
+        required: ['serviceId', 'environmentId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_get_variables',
+      description: 'Get environment variables for a Railway service or environment',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+          environmentId: { type: 'string', description: 'Environment ID' },
+          serviceId: { type: 'string', description: 'Service ID (optional, omit for shared variables)' },
+        },
+        required: ['projectId', 'environmentId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_set_variables',
+      description: 'Set or update environment variables for a Railway service',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+          environmentId: { type: 'string', description: 'Environment ID' },
+          serviceId: { type: 'string', description: 'Service ID (optional)' },
+          variables: { type: 'object', description: 'Variables to set as key-value pairs' },
+          skipDeploys: { type: 'boolean', description: 'Skip triggering a redeploy after change' },
+        },
+        required: ['projectId', 'environmentId', 'variables'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_create_volume',
+      description: 'Create a persistent volume attached to a Railway service',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+          serviceId: { type: 'string', description: 'Service ID to attach volume to' },
+          mountPath: { type: 'string', description: 'Mount path (e.g., /data, /var/lib/postgresql/data)' },
+        },
+        required: ['projectId', 'serviceId', 'mountPath'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_list_volumes',
+      description: 'List all volumes in a Railway project',
+      parameters: {
+        type: 'object',
+        properties: {
+          projectId: { type: 'string', description: 'Railway project ID' },
+        },
+        required: ['projectId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'railway_get_logs',
+      description: 'Get deployment logs for a Railway service',
+      parameters: {
+        type: 'object',
+        properties: {
+          serviceId: { type: 'string', description: 'Service ID' },
+          lines: { type: 'number', description: 'Number of log lines (default 200, max 1000)' },
+        },
+        required: ['serviceId'],
       },
     },
   },
@@ -475,6 +677,208 @@ async function executeTool(name, args, workdir, signal) {
       }
     }
 
+    // ─── Railway Management Tools ─────────────────────────────────────
+    case 'railway_list_projects': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/projects?cid=internal`, {
+          headers: { 'X-Internal-Request': 'true' }
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: JSON.stringify(data.projects, null, 2) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_list_services': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/services?project=${args.projectId}&cid=internal`, {
+          headers: { 'X-Internal-Request': 'true' }
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: JSON.stringify(data.services, null, 2) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_list_environments': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/environments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify({ projectId: args.projectId }),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: JSON.stringify(data.environments, null, 2) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_create_service': {
+      try {
+        const DB_IMAGES = {
+          postgres: 'postgres:16-alpine',
+          mysql: 'mysql:8',
+          redis: 'redis:7-alpine',
+          mongodb: 'mongo:7',
+        };
+        let source = undefined;
+        if (args.type === 'docker' && args.dockerImage) {
+          source = { image: args.dockerImage };
+        } else if (DB_IMAGES[args.type]) {
+          source = { image: DB_IMAGES[args.type] };
+        }
+
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/service/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify({
+            projectId: args.projectId,
+            name: args.name,
+            source,
+            variables: args.environmentVariables,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: `Created service "${data.name}" (ID: ${data.id})` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_delete_service': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/service/${args.serviceId}`, {
+          method: 'DELETE',
+          headers: { 'X-Internal-Request': 'true' },
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: `Service ${args.serviceId} deleted` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_deploy': {
+      try {
+        const body = { serviceId: args.serviceId, environmentId: args.environmentId };
+        if (args.commitSha) body.commitSha = args.commitSha;
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: `Deployment triggered (ID: ${data.deploymentId})` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_redeploy': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/redeploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify({ serviceId: args.serviceId, environmentId: args.environmentId }),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: `Redeploy triggered (ID: ${data.deploymentId})` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_get_variables': {
+      try {
+        let url = `${WORKDIR_BASE_URL}/api/railway/vars?project=${args.projectId}&environment=${args.environmentId}&cid=internal`;
+        if (args.serviceId) url += `&service=${args.serviceId}`;
+        const res = await fetch(url, { headers: { 'X-Internal-Request': 'true' } });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: JSON.stringify(data.variables, null, 2) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_set_variables': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/vars/set`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify({
+            projectId: args.projectId,
+            environmentId: args.environmentId,
+            serviceId: args.serviceId,
+            variables: args.variables,
+            skipDeploys: args.skipDeploys,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: 'Variables updated successfully' };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_create_volume': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/volume/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Internal-Request': 'true' },
+          body: JSON.stringify({
+            projectId: args.projectId,
+            serviceId: args.serviceId,
+            mountPath: args.mountPath,
+          }),
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: `Volume "${data.name}" created (ID: ${data.id}), mounted at ${args.mountPath}` };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_list_volumes': {
+      try {
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/volumes?project=${args.projectId}&cid=internal`, {
+          headers: { 'X-Internal-Request': 'true' },
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        return { success: true, content: JSON.stringify(data.volumes, null, 2) };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    case 'railway_get_logs': {
+      try {
+        const limit = Math.min(args.lines || 200, 1000);
+        const res = await fetch(`${WORKDIR_BASE_URL}/api/railway/logs?service=${args.serviceId}&lines=${limit}&cid=internal`, {
+          headers: { 'X-Internal-Request': 'true' },
+        });
+        const data = await res.json();
+        if (data.error) return { success: false, error: data.error };
+        const logText = (data.logs || []).map(l => `[${new Date(parseInt(l.timestamp)).toISOString()}] ${l.text}`).join('\n');
+        return { success: true, content: logText || '(no logs)' };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
     default:
       return { success: false, error: `Unknown tool: ${name}` };
   }
@@ -483,7 +887,7 @@ async function executeTool(name, args, workdir, signal) {
 // ─── Agent Loop ───────────────────────────────────────────────────
 // Accepts existing session messages, appends user message, runs agent loop,
 // returns { messages, tokenUsage } for the session to persist.
-async function runAgent(userMessage, session, callbacks, workdir) {
+async function runAgent(userMessage, session, callbacks, workdir, connId) {
   const { onStatus, onCode, onText, onError, onTokenUpdate, signal } = callbacks;
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = session.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';

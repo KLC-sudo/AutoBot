@@ -223,6 +223,92 @@ function revertLastCommand() {
   showToast('Reverting...', 'rename');
 }
 
+/* ─── Long-press Context Menu (Mobile Revert) ────────────────────── */
+const ContextMenu = (() => {
+  let _menu = null;
+  let _pressTimer = null;
+  let _pressTarget = null;
+  let _pressTimeout = 500;
+
+  function _ensureMenu() {
+    if (_menu) return;
+    _menu = document.createElement('div');
+    _menu.className = 'context-menu hidden';
+    _menu.innerHTML = `<button class="context-menu-item" data-action="revert">↩ Revert this command</button>`;
+    document.body.appendChild(_menu);
+
+    _menu.querySelector('[data-action="revert"]').addEventListener('click', () => {
+      revertLastCommand();
+      hide();
+    });
+  }
+
+  function show(x, y, target) {
+    _ensureMenu();
+    _pressTarget = target;
+    _menu.classList.remove('hidden');
+
+    // Position menu, keeping it on screen
+    const rect = _menu.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = x;
+    let top = y;
+    if (left + rect.width > vw - 10) left = vw - rect.width - 10;
+    if (top + rect.height > vh - 10) top = vh - rect.height - 10;
+    if (left < 10) left = 10;
+    if (top < 10) top = 10;
+
+    _menu.style.left = left + 'px';
+    _menu.style.top = top + 'px';
+  }
+
+  function hide() {
+    if (_menu) _menu.classList.add('hidden');
+    _pressTarget = null;
+  }
+
+  function _onPointerDown(e) {
+    const msg = e.target.closest('.msg-user');
+    if (!msg) return;
+    _pressTimer = setTimeout(() => {
+      const touch = e.touches ? e.touches[0] : e;
+      show(touch.clientX, touch.clientY, msg);
+    }, _pressTimeout);
+  }
+
+  function _onPointerUp() {
+    clearTimeout(_pressTimer);
+  }
+
+  function _onPointerMove() {
+    clearTimeout(_pressTimer);
+  }
+
+  function init() {
+    document.addEventListener('touchstart', _onPointerDown, { passive: true });
+    document.addEventListener('touchend', _onPointerUp);
+    document.addEventListener('touchmove', _onPointerMove, { passive: true });
+    // Also support right-click on desktop for consistency
+    document.addEventListener('contextmenu', (e) => {
+      const msg = e.target.closest('.msg-user');
+      if (msg && !e.target.closest('.msg-revert-btn')) {
+        e.preventDefault();
+        show(e.clientX, e.clientY, msg);
+      }
+    });
+    // Dismiss on tap outside
+    document.addEventListener('click', (e) => {
+      if (_menu && !_menu.contains(e.target)) hide();
+    });
+    document.addEventListener('touchstart', (e) => {
+      if (_menu && !_menu.contains(e.target)) hide();
+    }, { passive: true });
+  }
+
+  return { init, hide };
+})();
+
 /* ─── Command Dispatch ──────────────────────────────────────────── */
 function dispatchCommand(event) {
   event.preventDefault();
@@ -535,7 +621,8 @@ document.addEventListener('DOMContentLoaded', () => {
     hamburger.style.display = 'none';
   }
 
-  // Auto-reconnect
+  // Initialize context menu for mobile long-press revert
+  ContextMenu.init();
   const storedToken = Auth.getToken();
   if (storedToken) {
     setLoginLoading(true);
