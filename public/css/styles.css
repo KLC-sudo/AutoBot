@@ -560,6 +560,10 @@ html, body {
   .code-close-btn { display: none !important; }
 }
 
+/* Debug panel trigger button */
+.debug-trigger { font-size: 14px; opacity: 0.4; transition: opacity 0.2s; }
+.debug-trigger:hover { opacity: 1; }
+
 /* ═══════════════════════════════════════════════════════════════════
    DEBUG PANEL
    ═══════════════════════════════════════════════════════════════════ */

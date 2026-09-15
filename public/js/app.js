@@ -411,7 +411,10 @@ document.addEventListener('DOMContentLoaded', () => {
   WsClient.on('modelsList', (pkt) => populateModels(pkt.models || []));
   WsClient.on('disconnected', () => { currentSessionId = null; });
 
-  // Debug panel — triple-tap connection status indicator
+  // Debug panel — click debug button or triple-tap status indicator
+  document.getElementById('debug-btn').addEventListener('click', () => {
+    if (typeof Debug !== 'undefined') Debug.toggle();
+  });
   const statusDots = document.getElementById('conn-indicator');
   if (statusDots) {
     let _tapCount = 0;
