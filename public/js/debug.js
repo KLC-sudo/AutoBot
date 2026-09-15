@@ -374,7 +374,8 @@ const Debug = (() => {
       if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
       if (!data.logs?.length) { statusEl.textContent = 'No logs found'; return; }
 
-      const depInfo = data.deployment ? ` [${data.deployment.status}]` : '';
+      const dep = data.deployment;
+      const depInfo = dep ? ` | ${dep.status} | deployed ${dep.timeAgo} (${dep.deployedAt})` : '';
       statusEl.textContent = `${data.logs.length} log entries${depInfo}`;
       data.logs.forEach(entry => {
         const el = document.createElement('div');

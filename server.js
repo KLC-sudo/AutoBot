@@ -458,35 +458,60 @@ app.get('/api/railway/logs', requireRailway, async (req, res) => {
   const limit = Math.min(parseInt(req.query.lines, 10) || 200, 1000);
   if (!serviceId) return res.status(400).json({ error: 'Missing service param.' });
   try {
-    // Get latest deployment for this service
+    // Get latest deployment for this service (with status and timestamp)
     const deployData = await railwayQuery(`query ($serviceId: String!) {
       deployments(input: { serviceId: $serviceId }, first: 1) {
-        edges { node { id } }
+        edges { node { id status createdAt } }
       }
     }`, { serviceId });
 
     const edges = deployData.deployments?.edges;
-    if (!edges?.length) return res.json({ logs: [] });
+    if (!edges?.length) return res.json({ logs: [], deployment: null });
 
-    const deploymentId = edges[0].node.id;
+    const deployment = edges[0].node;
 
     // Get logs for that deployment
     const logData = await railwayQuery(`query ($id: String!, $limit: Int) {
       deploymentLogs(deploymentId: $id, limit: $limit) {
         timestamp message severity
       }
-    }`, { id: deploymentId, limit });
+    }`, { id: deployment.id, limit });
 
     const logs = (logData.deploymentLogs || []).map(l => ({
       timestamp: l.timestamp,
       text: l.message,
       source: l.severity || 'default',
     }));
-    res.json({ logs });
+
+    // Calculate time ago for the deployment
+    const depTime = new Date(parseInt(deployment.createdAt));
+    const timeAgo = _timeAgo(depTime);
+
+    res.json({
+      logs,
+      deployment: {
+        id: deployment.id,
+        status: deployment.status,
+        createdAt: deployment.createdAt,
+        timeAgo,
+        deployedAt: depTime.toLocaleString(),
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+function _timeAgo(date) {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 // ─── Railway Management Mutations ─────────────────────────────────
 
