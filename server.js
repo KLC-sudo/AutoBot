@@ -358,8 +358,8 @@ app.get('/api/railway/projects', requireRailway, async (req, res) => {
   try {
     // Strategy 1: get workspaces via me, then projects in each
     try {
-      const meData = await railwayQuery(`{ me { workspaces(first: 20) { edges { node { id name } } } } }`);
-      const workspaces = meData.me?.workspaces?.edges?.map(e => e.node) || [];
+      const meData = await railwayQuery(`{ me { workspaces { id name } } }`);
+      const workspaces = meData.me?.workspaces || [];
       if (workspaces.length) {
         serverLog('info', `Found ${workspaces.length} workspaces, querying projects...`);
         const allProjects = [];
