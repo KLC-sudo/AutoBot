@@ -384,26 +384,12 @@ app.get('/api/railway/token-info', requireRailway, async (req, res) => {
 app.get('/api/railway/projects', requireRailway, async (req, res) => {
   serverLog('info', `Railway projects request from ${req.query.cid?.substring(0, 8)}`);
   try {
-    // Strategy 0: Check for RAILWAY_PROJECT_ID env var (direct override)
-    const envProjectId = process.env.RAILWAY_PROJECT_ID;
-    if (envProjectId) {
-      serverLog('info', `Using RAILWAY_PROJECT_ID env var: ${envProjectId}`);
-      // Try to get the project name
-      try {
-        const data = await railwayQuery(`query ($id: String!) { project(id: $id) { id name } }`, { id: envProjectId });
-        if (data.project) {
-          return res.json({ projects: [data.project], source: 'env_var' });
-        }
-      } catch {}
-      return res.json({ projects: [{ id: envProjectId, name: 'Project (from env)' }], source: 'env_var' });
-    }
-
     // Strategy 1: get workspaces via me, then projects in each
     try {
-      const meData = await railwayQuery(`{ me { id name email workspaces { id name } } }`);
+      const meData = await railwayQuery(`{ me { workspaces { id name } } }`);
       const workspaces = meData.me?.workspaces || [];
-      serverLog('info', `Account: ${meData.me?.name || meData.me?.email || 'unknown'}, ${workspaces.length} workspace(s)`);
       if (workspaces.length) {
+        serverLog('info', `Found ${workspaces.length} workspaces, querying projects...`);
         const allProjects = [];
         for (const ws of workspaces) {
           try {
@@ -413,7 +399,7 @@ app.get('/api/railway/projects', requireRailway, async (req, res) => {
               }
             }`, { wsId: ws.id });
             const projs = pData.workspace?.projects?.edges?.map(e => e.node) || [];
-            projs.forEach(p => allProjects.push({ ...p, workspace: ws.name }));
+            projs.forEach(p => allProjects.push(p));
           } catch (e) { serverLog('warn', `projects in workspace ${ws.name}: ${e.message}`); }
         }
         if (allProjects.length) {
@@ -434,56 +420,16 @@ app.get('/api/railway/projects', requireRailway, async (req, res) => {
 
     // Strategy 3: projectToken (single project only)
     try {
-      const data = await railwayQuery(`{ projectToken { projectId environmentId } }`);
+      const data = await railwayQuery(`{ projectToken { projectId } }`);
       if (data.projectToken?.projectId) {
         serverLog('info', `Project token: ${data.projectToken.projectId}`);
-        // Try to get project name
-        try {
-          const pData = await railwayQuery(`query ($id: String!) { project(id: $id) { id name } }`, { id: data.projectToken.projectId });
-          if (pData.project) return res.json({ projects: [pData.project], source: 'project_token' });
-        } catch {}
-        return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project' }], source: 'project_token' });
+        return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project' }] });
       }
     } catch (e) { serverLog('warn', `projectToken failed: ${e.message}`); }
 
-    // Strategy 4: Try to look up a project by name if provided
-    const searchName = req.query.name;
-    if (searchName) {
-      try {
-        const data = await railwayQuery(`{ projects(first: 100) { edges { node { id name } } } }`);
-        const found = data.projects?.edges?.find(e => e.node.name.toLowerCase() === searchName.toLowerCase());
-        if (found) {
-          serverLog('info', `Found project by name: ${found.node.name}`);
-          return res.json({ projects: [found.node], source: 'name_search' });
-        }
-      } catch {}
-    }
-
-    res.json({
-      projects: [],
-      error: 'No projects found. Your token may not have access to the workspace containing your project.',
-      help: 'Set RAILWAY_PROJECT_ID env var, or create a new token at https://railway.com/account/tokens with access to the correct workspace.',
-    });
+    res.json({ projects: [], error: 'No projects found via any query method.' });
   } catch (err) {
     serverLog('error', `Railway projects error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/railway/project/:id — direct project lookup by ID
-app.get('/api/railway/project/:id', requireRailway, async (req, res) => {
-  try {
-    const data = await railwayQuery(`query ($id: String!) {
-      project(id: $id) {
-        id name
-        services { edges { node { id name } } }
-        environments { edges { node { id name } } }
-        volumes { edges { node { id name } } }
-      }
-    }`, { id: req.params.id });
-    if (!data.project) return res.status(404).json({ error: 'Project not found or no access.' });
-    res.json(data.project);
-  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -493,22 +439,14 @@ app.get('/api/railway/services', requireRailway, async (req, res) => {
   const projectId = req.query.project;
   if (!projectId) return res.status(400).json({ error: 'Missing project param.' });
   try {
-    serverLog('info', `Fetching services for project ${projectId.substring(0, 8)}`);
     const data = await railwayQuery(`query ($id: String!) {
       project(id: $id) {
-        name
-        services(first: 50) { edges { node { id name } } }
+        services { edges { node { id name } } }
       }
     }`, { id: projectId });
-    if (!data.project) {
-      serverLog('warn', `Project ${projectId.substring(0, 8)} not found or no access`);
-      return res.json({ services: [], error: 'Project not found or no access.' });
-    }
     const services = data.project.services.edges.map(e => e.node);
-    serverLog('info', `Found ${services.length} services in ${data.project.name}: ${services.map(s => s.name).join(', ')}`);
-    res.json({ services, projectName: data.project.name });
+    res.json({ services });
   } catch (err) {
-    serverLog('error', `Services fetch error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -520,32 +458,31 @@ app.get('/api/railway/logs', requireRailway, async (req, res) => {
   const limit = Math.min(parseInt(req.query.lines, 10) || 200, 1000);
   if (!serviceId) return res.status(400).json({ error: 'Missing service param.' });
   try {
-    // Get latest deployment (any status) for this service
+    // Get latest deployment for this service
     const deployData = await railwayQuery(`query ($serviceId: String!) {
       deployments(input: { serviceId: $serviceId }, first: 1) {
-        edges { node { id status createdAt } }
+        edges { node { id } }
       }
     }`, { serviceId });
 
     const edges = deployData.deployments?.edges;
-    if (!edges?.length) return res.json({ logs: [], deployment: null });
+    if (!edges?.length) return res.json({ logs: [] });
 
-    const deployment = edges[0].node;
-    serverLog('info', `Fetching logs for deployment ${deployment.id.substring(0, 8)} (status: ${deployment.status})`);
+    const deploymentId = edges[0].node.id;
 
     // Get logs for that deployment
     const logData = await railwayQuery(`query ($id: String!, $limit: Int) {
       deploymentLogs(deploymentId: $id, limit: $limit) {
         timestamp message severity
       }
-    }`, { id: deployment.id, limit });
+    }`, { id: deploymentId, limit });
 
     const logs = (logData.deploymentLogs || []).map(l => ({
       timestamp: l.timestamp,
       text: l.message,
       source: l.severity || 'default',
     }));
-    res.json({ logs, deployment: { id: deployment.id, status: deployment.status, createdAt: deployment.createdAt } });
+    res.json({ logs });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
