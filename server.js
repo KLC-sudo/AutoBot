@@ -297,6 +297,76 @@ app.get('/api/diag', (req, res) => {
   });
 });
 
+// ─── Railway API Proxy ──────────────────────────────────────────────
+const RAILWAY_API = 'https://api.railway.app/graphql';
+const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
+
+async function railwayQuery(query, variables = {}) {
+  if (!RAILWAY_TOKEN) throw new Error('RAILWAY_API_TOKEN not set');
+  const res = await fetch(RAILWAY_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RAILWAY_TOKEN}` },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await res.json();
+  if (json.errors) throw new Error(json.errors[0]?.message || 'Railway API error');
+  return json.data;
+}
+
+function requireRailway(req, res, next) {
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured.' });
+  const connId = req.query.cid || req.headers['x-connection-id'];
+  if (!connId || !conns.has(connId)) return res.status(401).json({ error: 'No connection.' });
+  next();
+}
+
+// GET /api/railway/projects — list all projects
+app.get('/api/railway/projects', requireRailway, async (req, res) => {
+  try {
+    const data = await railwayQuery(`{
+      me { projects(first: 50, after: null) { edges { node { id name updatedAt } } } }
+    }`);
+    const projects = data.me.projects.edges.map(e => e.node);
+    res.json({ projects });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/railway/services?project=<id> — list services in a project
+app.get('/api/railway/services', requireRailway, async (req, res) => {
+  const projectId = req.query.project;
+  if (!projectId) return res.status(400).json({ error: 'Missing project param.' });
+  try {
+    const data = await railwayQuery(`{
+      project(id: "${projectId}") {
+        services(first: 50) { edges { node { id name } } }
+      }
+    }`);
+    const services = data.project.services.edges.map(e => e.node);
+    res.json({ services });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/railway/logs?service=<id>&lines=200 — fetch logs for a service
+app.get('/api/railway/logs', requireRailway, async (req, res) => {
+  const serviceId = req.query.service;
+  const lines = Math.min(parseInt(req.query.lines, 10) || 200, 1000);
+  if (!serviceId) return res.status(400).json({ error: 'Missing service param.' });
+  try {
+    const data = await railwayQuery(`{
+      logs(serviceId: "${serviceId}", limit: ${lines}) {
+        elements { id timestamp text source }
+      }
+    }`);
+    res.json({ logs: data.logs.elements });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 function shutdown(signal) {

@@ -564,6 +564,38 @@ html, body {
 .debug-trigger { font-size: 14px; opacity: 0.4; transition: opacity 0.2s; }
 .debug-trigger:hover { opacity: 1; }
 
+/* Tabs */
+.debug-tabs {
+  display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.debug-tab {
+  flex: 1; background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); cursor: pointer; font-size: 11px;
+  padding: 6px 12px; font-family: var(--font-sans); transition: all 0.15s;
+}
+.debug-tab:hover { color: var(--text-secondary); }
+.debug-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.debug-tab-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.debug-tab-content.hidden { display: none; }
+
+/* Railway controls */
+.railway-controls {
+  display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border);
+  flex-wrap: wrap; flex-shrink: 0;
+}
+.railway-select {
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--text-primary);
+  font-size: 11px; padding: 4px 6px; border-radius: var(--radius-sm);
+  font-family: var(--font-sans); min-width: 0;
+}
+.railway-select:focus { border-color: var(--accent); outline: none; }
+.rw-lines { max-width: 90px; }
+.railway-status {
+  padding: 4px 12px; font-size: 10px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    DEBUG PANEL
    ═══════════════════════════════════════════════════════════════════ */

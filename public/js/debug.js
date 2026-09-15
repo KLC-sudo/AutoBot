@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   debug.js — In-app debug panel with console capture + copy-to-clipboard
+   debug.js — In-app debug panel: local logs + Railway logs + diagnostics
    ═══════════════════════════════════════════════════════════════════════ */
 
 const Debug = (() => {
@@ -43,20 +43,50 @@ const Debug = (() => {
         <div class="debug-header-actions">
           <button class="debug-btn" id="debug-copy" title="Copy all logs">Copy</button>
           <button class="debug-btn" id="debug-clear" title="Clear logs">Clear</button>
-          <button class="debug-btn" id="debug-diag" title="Show diagnostics">Diag</button>
+          <button class="debug-btn" id="debug-diag" title="Diagnostics">Diag</button>
           <button class="debug-btn debug-close" id="debug-close">✕</button>
         </div>
       </div>
-      <div class="debug-filters">
-        <button class="debug-filter active" data-level="all">All</button>
-        <button class="debug-filter" data-level="error">Errors</button>
-        <button class="debug-filter" data-level="warn">Warnings</button>
-        <button class="debug-filter" data-level="info">Info</button>
+      <div class="debug-tabs">
+        <button class="debug-tab active" data-tab="local">Local Logs</button>
+        <button class="debug-tab" data-tab="railway">Railway</button>
       </div>
-      <div class="debug-diag hidden" id="debug-diag-box"></div>
-      <div class="debug-log" id="debug-log"></div>
+      <div class="debug-tab-content" id="debug-tab-local">
+        <div class="debug-filters">
+          <button class="debug-filter active" data-level="all">All</button>
+          <button class="debug-filter" data-level="error">Errors</button>
+          <button class="debug-filter" data-level="warn">Warnings</button>
+          <button class="debug-filter" data-level="info">Info</button>
+        </div>
+        <div class="debug-diag hidden" id="debug-diag-box"></div>
+        <div class="debug-log" id="debug-log"></div>
+      </div>
+      <div class="debug-tab-content hidden" id="debug-tab-railway">
+        <div class="railway-controls">
+          <select id="rw-project" class="railway-select"><option value="">Loading projects...</option></select>
+          <select id="rw-service" class="railway-select" disabled><option value="">Select project first</option></select>
+          <button class="debug-btn" id="rw-fetch">Fetch Logs</button>
+          <select id="rw-lines" class="railway-select rw-lines">
+            <option value="100">100 lines</option>
+            <option value="200" selected>200 lines</option>
+            <option value="500">500 lines</option>
+          </select>
+        </div>
+        <div class="railway-status" id="rw-status"></div>
+        <div class="debug-log" id="rw-log"></div>
+      </div>
     `;
     document.body.appendChild(_panel);
+
+    // Tab switching
+    _panel.querySelectorAll('.debug-tab').forEach(tab => {
+      tab.onclick = () => {
+        _panel.querySelectorAll('.debug-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        _panel.querySelector('.debug-tab-content:not(.hidden)')?.classList.add('hidden');
+        document.getElementById(`debug-tab-${tab.dataset.tab}`).classList.remove('hidden');
+      };
+    });
 
     document.getElementById('debug-close').onclick = toggle;
     document.getElementById('debug-clear').onclick = () => {
@@ -73,9 +103,14 @@ const Debug = (() => {
         _filterLogs(btn.dataset.level);
       };
     });
+
+    // Railway controls
+    document.getElementById('rw-project').onchange = _loadServices;
+    document.getElementById('rw-fetch').onclick = _fetchRailwayLogs;
+    _loadProjects();
   }
 
-  // ─── Render existing logs into panel ──────────────────────────────
+  // ─── Local log rendering ──────────────────────────────────────────
   function _renderAllLogs(filter) {
     const logEl = document.getElementById('debug-log');
     if (!logEl) return;
@@ -98,9 +133,7 @@ const Debug = (() => {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
-  function _filterLogs(level) {
-    _renderAllLogs(level);
-  }
+  function _filterLogs(level) { _renderAllLogs(level); }
 
   // ─── Copy to clipboard ────────────────────────────────────────────
   function _copyLogs() {
@@ -108,27 +141,31 @@ const Debug = (() => {
       const time = new Date(e.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       return `[${time}] [${e.level.toUpperCase()}] [${e.src || 'server'}] ${e.msg}`;
     });
+
+    // Also include Railway logs if visible
+    const rwLogEl = document.getElementById('rw-log');
+    let rwLines = [];
+    if (rwLogEl && rwLogEl.children.length) {
+      rwLines = ['\n--- RAILWAY LOGS ---', ...Array.from(rwLogEl.children).map(e => e.textContent)];
+    }
+
     const diagBox = document.getElementById('debug-diag-box');
     const diagText = diagBox && !diagBox.classList.contains('hidden') ? '\n\n--- DIAGNOSTICS ---\n' + diagBox.textContent : '';
+
     const text = `=== Hermes Debug Log — ${new Date().toLocaleString()} ===\n` +
-                 `Entries: ${lines.length}\n\n` +
-                 lines.join('\n') + diagText;
+                 `Entries: ${lines.length}${rwLines.length ? ` + ${rwLines.length} Railway` : ''}\n\n` +
+                 lines.join('\n') + rwLines.join('\n') + diagText;
 
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('debug-copy');
       btn.textContent = 'Copied!';
       setTimeout(() => btn.textContent = 'Copy', 1500);
     }).catch(() => {
-      // Fallback: textarea
       const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-      const btn = document.getElementById('debug-copy');
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy', 1500);
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      document.getElementById('debug-copy').textContent = 'Copied!';
+      setTimeout(() => document.getElementById('debug-copy').textContent = 'Copy', 1500);
     });
   }
 
@@ -139,26 +176,24 @@ const Debug = (() => {
     if (!box.classList.contains('hidden')) {
       box.textContent = 'Loading...';
       try {
-        const cid = typeof WsClient !== 'undefined' ? WsClient.getConnectionId() : null;
+        const cid = WsClient.getConnectionId();
         if (!cid) { box.textContent = 'No active connection'; return; }
         const res = await fetch(`/api/diag?cid=${cid}`);
         const data = await res.json();
         box.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-      } catch (err) {
-        box.textContent = `Error: ${err.message}`;
-      }
+      } catch (err) { box.textContent = `Error: ${err.message}`; }
     }
   }
 
   // ─── Fetch server logs ────────────────────────────────────────────
   let _lastServerLogTime = 0;
   async function _fetchServerLogs() {
-    const cid = typeof WsClient !== 'undefined' ? WsClient.getConnectionId() : null;
+    const cid = WsClient.getConnectionId();
     if (!cid) return;
     try {
       const res = await fetch(`/api/logs?cid=${cid}&since=${_lastServerLogTime}`);
       const data = await res.json();
-      if (data.logs && data.logs.length) {
+      if (data.logs?.length) {
         data.logs.forEach(e => {
           _logEntries.push({ t: e.t, level: e.level, msg: e.msg, src: 'server' });
           if (_logEntries.length > MAX_CLIENT_LOGS) _logEntries.shift();
@@ -171,7 +206,82 @@ const Debug = (() => {
 
   function _startServerPoll() {
     if (_pollTimer) return;
-    _pollTimer = setInterval(_fetchServerLogs, 3000);
+    _pollTimer = setInterval(_fetchServerLogs, 5000);
+  }
+
+  // ─── Railway API ──────────────────────────────────────────────────
+  async function _loadProjects() {
+    const sel = document.getElementById('rw-project');
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/projects?cid=${cid}`);
+      const data = await res.json();
+      if (data.error) { sel.innerHTML = `<option value="">${data.error}</option>`; return; }
+      sel.innerHTML = '<option value="">Select project...</option>';
+      data.projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id; opt.textContent = p.name;
+        sel.appendChild(opt);
+      });
+    } catch (err) {
+      sel.innerHTML = `<option value="">Error: ${err.message}</option>`;
+    }
+  }
+
+  async function _loadServices() {
+    const projectSel = document.getElementById('rw-project');
+    const serviceSel = document.getElementById('rw-service');
+    const projectId = projectSel.value;
+    if (!projectId) { serviceSel.disabled = true; serviceSel.innerHTML = '<option value="">Select project first</option>'; return; }
+    serviceSel.disabled = true;
+    serviceSel.innerHTML = '<option value="">Loading...</option>';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/services?project=${projectId}&cid=${cid}`);
+      const data = await res.json();
+      if (data.error) { serviceSel.innerHTML = `<option value="">${data.error}</option>`; return; }
+      serviceSel.innerHTML = '<option value="">Select service...</option>';
+      data.services.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id; opt.textContent = s.name;
+        serviceSel.appendChild(opt);
+      });
+      serviceSel.disabled = false;
+    } catch (err) {
+      serviceSel.innerHTML = `<option value="">Error: ${err.message}</option>`;
+    }
+  }
+
+  async function _fetchRailwayLogs() {
+    const serviceSel = document.getElementById('rw-service');
+    const linesSel = document.getElementById('rw-lines');
+    const statusEl = document.getElementById('rw-status');
+    const logEl = document.getElementById('rw-log');
+    const serviceId = serviceSel.value;
+    if (!serviceId) { statusEl.textContent = 'Select a service first'; return; }
+
+    statusEl.textContent = 'Fetching logs...';
+    logEl.innerHTML = '';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/logs?service=${serviceId}&lines=${linesSel.value}&cid=${cid}`);
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      if (!data.logs?.length) { statusEl.textContent = 'No logs found'; return; }
+
+      statusEl.textContent = `${data.logs.length} log entries`;
+      data.logs.forEach(entry => {
+        const el = document.createElement('div');
+        el.className = `debug-entry debug-info`;
+        const time = new Date(parseInt(entry.timestamp)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const source = entry.source === 'BUILD' ? '🔨' : entry.source === 'DEPLOY' ? '🚀' : '●';
+        el.innerHTML = `<span class="debug-time">${time}</span> <span class="debug-src">${source}</span> ${_escHtml(entry.text)}`;
+        logEl.appendChild(el);
+      });
+      logEl.scrollTop = logEl.scrollHeight;
+    } catch (err) {
+      statusEl.textContent = `Error: ${err.message}`;
+    }
   }
 
   // ─── Toggle panel ─────────────────────────────────────────────────
@@ -187,15 +297,8 @@ const Debug = (() => {
   }
 
   function _escHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-
-  // Expose connection ID for diag endpoint
-  function _getConnectionId() {
-    return typeof WsClient !== 'undefined' ? WsClient._connectionId : null;
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   return { toggle };
 })();
-
-
