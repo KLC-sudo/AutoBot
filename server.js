@@ -356,28 +356,30 @@ app.get('/api/railway/token-info', requireRailway, async (req, res) => {
 app.get('/api/railway/projects', requireRailway, async (req, res) => {
   serverLog('info', `Railway projects request from ${req.query.cid?.substring(0, 8)}`);
   try {
-    // Strategy 1: query workspaces, then projects in each workspace
+    // Strategy 1: get workspaces via me, then projects in each
     try {
-      const wsData = await railwayQuery(`{ workspaces(first: 20) { edges { node { id name } } } }`);
-      const workspaces = wsData.workspaces?.edges?.map(e => e.node) || [];
+      const meData = await railwayQuery(`{ me { workspaces(first: 20) { edges { node { id name } } } } }`);
+      const workspaces = meData.me?.workspaces?.edges?.map(e => e.node) || [];
       if (workspaces.length) {
         serverLog('info', `Found ${workspaces.length} workspaces, querying projects...`);
         const allProjects = [];
         for (const ws of workspaces) {
           try {
             const pData = await railwayQuery(`query ($wsId: String!) {
-              projects(workspaceId: $wsId) { edges { node { id name } } }
+              workspace(workspaceId: $wsId) {
+                projects(first: 50) { edges { node { id name } } }
+              }
             }`, { wsId: ws.id });
-            const projs = pData.projects?.edges?.map(e => e.node) || [];
+            const projs = pData.workspace?.projects?.edges?.map(e => e.node) || [];
             projs.forEach(p => allProjects.push(p));
-          } catch (e) { serverLog('warn', `projects in workspace ${ws.name} failed: ${e.message}`); }
+          } catch (e) { serverLog('warn', `projects in workspace ${ws.name}: ${e.message}`); }
         }
         if (allProjects.length) {
-          serverLog('info', `Found ${allProjects.length} total projects across workspaces`);
+          serverLog('info', `Found ${allProjects.length} total projects`);
           return res.json({ projects: allProjects });
         }
       }
-    } catch (e) { serverLog('warn', `workspaces query failed: ${e.message}`); }
+    } catch (e) { serverLog('warn', `me.workspaces failed: ${e.message}`); }
 
     // Strategy 2: top-level projects query
     try {
