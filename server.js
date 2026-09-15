@@ -308,8 +308,14 @@ async function railwayQuery(query, variables = {}) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RAILWAY_TOKEN}` },
     body: JSON.stringify({ query, variables }),
   });
-  const json = await res.json();
-  if (json.errors) throw new Error(json.errors[0]?.message || 'Railway API error');
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { throw new Error(`Railway API returned non-JSON: ${text.substring(0, 200)}`); }
+  if (json.errors) {
+    const msg = json.errors.map(e => e.message).join('; ');
+    serverLog('error', `Railway API error: ${msg}`);
+    throw new Error(msg);
+  }
   return json.data;
 }
 
@@ -348,36 +354,39 @@ app.get('/api/railway/token-info', requireRailway, async (req, res) => {
 
 // GET /api/railway/projects — list all projects
 app.get('/api/railway/projects', requireRailway, async (req, res) => {
+  serverLog('info', `Railway projects request from ${req.query.cid?.substring(0, 8)}`);
   try {
     // Try top-level projects query first (works with account + workspace tokens)
     let data;
     try {
       data = await railwayQuery(`{ projects { edges { node { id name } } } }`);
       if (data.projects?.edges) {
+        serverLog('info', `Railway projects found: ${data.projects.edges.length}`);
         return res.json({ projects: data.projects.edges.map(e => e.node) });
       }
-    } catch {}
+    } catch (e) { serverLog('warn', `projects query failed: ${e.message}`); }
 
     // Fallback: try me.projects (account tokens only)
     try {
       data = await railwayQuery(`{ me { projects(first: 50) { edges { node { id name } } } } }`);
       if (data.me?.projects?.edges) {
+        serverLog('info', `Railway me.projects found: ${data.me.projects.edges.length}`);
         return res.json({ projects: data.me.projects.edges.map(e => e.node) });
       }
-    } catch {}
+    } catch (e) { serverLog('warn', `me.projects query failed: ${e.message}`); }
 
     // Fallback: try projectToken (project tokens — single project only)
     try {
       data = await railwayQuery(`{ projectToken { projectId } }`);
       if (data.projectToken?.projectId) {
+        serverLog('info', `Railway project token: ${data.projectToken.projectId}`);
         return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project (project token)' }] });
       }
-    } catch (err) {
-      return res.status(403).json({ error: `Token not authorized for any project query. Token type may be restricted. (${err.message})` });
-    }
+    } catch (e) { serverLog('warn', `projectToken query failed: ${e.message}`); }
 
-    res.json({ projects: [] });
+    res.json({ projects: [], error: 'All project queries returned empty. Check token permissions.' });
   } catch (err) {
+    serverLog('error', `Railway projects error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
