@@ -493,14 +493,22 @@ app.get('/api/railway/services', requireRailway, async (req, res) => {
   const projectId = req.query.project;
   if (!projectId) return res.status(400).json({ error: 'Missing project param.' });
   try {
+    serverLog('info', `Fetching services for project ${projectId.substring(0, 8)}`);
     const data = await railwayQuery(`query ($id: String!) {
       project(id: $id) {
-        services { edges { node { id name } } }
+        name
+        services(first: 50) { edges { node { id name } } }
       }
     }`, { id: projectId });
+    if (!data.project) {
+      serverLog('warn', `Project ${projectId.substring(0, 8)} not found or no access`);
+      return res.json({ services: [], error: 'Project not found or no access.' });
+    }
     const services = data.project.services.edges.map(e => e.node);
-    res.json({ services });
+    serverLog('info', `Found ${services.length} services in ${data.project.name}: ${services.map(s => s.name).join(', ')}`);
+    res.json({ services, projectName: data.project.name });
   } catch (err) {
+    serverLog('error', `Services fetch error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

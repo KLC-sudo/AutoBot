@@ -333,6 +333,7 @@ const Debug = (() => {
   async function _loadServices() {
     const projectSel = document.getElementById('rw-project');
     const serviceSel = document.getElementById('rw-service');
+    const statusEl = document.getElementById('rw-status');
     const projectId = projectSel.value;
     if (!projectId) { serviceSel.disabled = true; serviceSel.innerHTML = '<option value="">Select project first</option>'; return; }
     serviceSel.disabled = true;
@@ -341,7 +342,7 @@ const Debug = (() => {
       const cid = WsClient.getConnectionId();
       const res = await fetch(`/api/railway/services?project=${projectId}&cid=${cid}`);
       const data = await res.json();
-      if (data.error) { serviceSel.innerHTML = `<option value="">${data.error}</option>`; return; }
+      if (data.error) { serviceSel.innerHTML = `<option value="">${data.error}</option>`; statusEl.textContent = data.error; return; }
       serviceSel.innerHTML = '<option value="">Select service...</option>';
       data.services.forEach(s => {
         const opt = document.createElement('option');
@@ -349,8 +350,10 @@ const Debug = (() => {
         serviceSel.appendChild(opt);
       });
       serviceSel.disabled = false;
+      statusEl.textContent = `${data.projectName || 'Project'}: ${data.services.length} service(s)`;
     } catch (err) {
       serviceSel.innerHTML = `<option value="">Error: ${err.message}</option>`;
+      statusEl.textContent = `Error: ${err.message}`;
     }
   }
 
@@ -410,6 +413,10 @@ const Debug = (() => {
         envSel.appendChild(opt);
       });
       envSel.disabled = false;
+      // Auto-select if only one environment
+      if (data.environments?.length === 1) {
+        envSel.value = data.environments[0].id;
+      }
     } catch (err) {
       envSel.innerHTML = `<option value="">Error: ${err.message}</option>`;
     }
