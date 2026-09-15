@@ -66,6 +66,7 @@ const Debug = (() => {
           <select id="rw-project" class="railway-select"><option value="">Loading projects...</option></select>
           <select id="rw-service" class="railway-select" disabled><option value="">Select project first</option></select>
           <button class="debug-btn" id="rw-fetch">Fetch Logs</button>
+          <button class="debug-btn" id="rw-check" title="Check token type">🔑</button>
           <select id="rw-lines" class="railway-select rw-lines">
             <option value="100">100 lines</option>
             <option value="200" selected>200 lines</option>
@@ -107,6 +108,7 @@ const Debug = (() => {
     // Railway controls
     document.getElementById('rw-project').onchange = _loadServices;
     document.getElementById('rw-fetch').onclick = _fetchRailwayLogs;
+    document.getElementById('rw-check').onclick = _checkToken;
     _loadProjects();
   }
 
@@ -212,19 +214,48 @@ const Debug = (() => {
   // ─── Railway API ──────────────────────────────────────────────────
   async function _loadProjects() {
     const sel = document.getElementById('rw-project');
+    const status = document.getElementById('rw-status');
     try {
       const cid = WsClient.getConnectionId();
+      if (!cid) { sel.innerHTML = '<option value="">No connection</option>'; return; }
+      status.textContent = 'Loading projects...';
       const res = await fetch(`/api/railway/projects?cid=${cid}`);
       const data = await res.json();
-      if (data.error) { sel.innerHTML = `<option value="">${data.error}</option>`; return; }
+      if (data.error) {
+        sel.innerHTML = `<option value="">${data.error}</option>`;
+        status.textContent = `Error: ${data.error}`;
+        return;
+      }
+      if (!data.projects?.length) {
+        sel.innerHTML = '<option value="">No projects found</option>';
+        status.textContent = 'No projects returned. Check token type.';
+        return;
+      }
       sel.innerHTML = '<option value="">Select project...</option>';
       data.projects.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p.id; opt.textContent = p.name;
         sel.appendChild(opt);
       });
+      status.textContent = `${data.projects.length} project(s) loaded`;
     } catch (err) {
       sel.innerHTML = `<option value="">Error: ${err.message}</option>`;
+      status.textContent = `Error: ${err.message}`;
+    }
+  }
+
+  async function _checkToken() {
+    const status = document.getElementById('rw-status');
+    status.textContent = 'Checking token...';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/token-info?cid=${cid}`);
+      const data = await res.json();
+      status.textContent = `Token type: ${data.type || 'unknown'}` +
+        (data.user ? ` (${data.user.name || data.user.email})` : '') +
+        (data.error ? ` — ${data.error}` : '');
+    } catch (err) {
+      status.textContent = `Error: ${err.message}`;
     }
   }
 
