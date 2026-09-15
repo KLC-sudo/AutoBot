@@ -320,16 +320,63 @@ function requireRailway(req, res, next) {
   next();
 }
 
+// GET /api/railway/token-info — check what kind of token we have
+app.get('/api/railway/token-info', requireRailway, async (req, res) => {
+  const info = { hasToken: !!RAILWAY_TOKEN, tokenPrefix: RAILWAY_TOKEN?.substring(0, 8) + '...' };
+  try {
+    const me = await railwayQuery(`{ me { id name email } }`);
+    info.type = 'account';
+    info.user = me.me;
+  } catch {
+    try {
+      const ws = await railwayQuery(`{ workspaces(first: 10) { edges { node { id name } } } }`);
+      info.type = 'workspace';
+      info.workspaces = ws.workspaces?.edges?.map(e => e.node) || [];
+    } catch {
+      try {
+        const pt = await railwayQuery(`{ projectToken { projectId environmentId } }`);
+        info.type = 'project';
+        info.projectToken = pt.projectToken;
+      } catch (err2) {
+        info.type = 'unknown';
+        info.error = err2.message;
+      }
+    }
+  }
+  res.json(info);
+});
+
 // GET /api/railway/projects — list all projects
 app.get('/api/railway/projects', requireRailway, async (req, res) => {
   try {
-    const data = await railwayQuery(`{
-      projects {
-        edges { node { id name } }
+    // Try top-level projects query first (works with account + workspace tokens)
+    let data;
+    try {
+      data = await railwayQuery(`{ projects { edges { node { id name } } } }`);
+      if (data.projects?.edges) {
+        return res.json({ projects: data.projects.edges.map(e => e.node) });
       }
-    }`);
-    const projects = data.projects.edges.map(e => e.node);
-    res.json({ projects });
+    } catch {}
+
+    // Fallback: try me.projects (account tokens only)
+    try {
+      data = await railwayQuery(`{ me { projects(first: 50) { edges { node { id name } } } } }`);
+      if (data.me?.projects?.edges) {
+        return res.json({ projects: data.me.projects.edges.map(e => e.node) });
+      }
+    } catch {}
+
+    // Fallback: try projectToken (project tokens — single project only)
+    try {
+      data = await railwayQuery(`{ projectToken { projectId } }`);
+      if (data.projectToken?.projectId) {
+        return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project (project token)' }] });
+      }
+    } catch (err) {
+      return res.status(403).json({ error: `Token not authorized for any project query. Token type may be restricted. (${err.message})` });
+    }
+
+    res.json({ projects: [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
