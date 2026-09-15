@@ -299,7 +299,7 @@ app.get('/api/diag', (req, res) => {
 
 // ─── Railway API Proxy ──────────────────────────────────────────────
 const RAILWAY_API = 'https://api.railway.app/graphql';
-const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN;
+const RAILWAY_TOKEN = process.env.RAILWAY_API_TOKEN || process.env.RAILWAY_TOKEN;
 
 async function railwayQuery(query, variables = {}) {
   if (!RAILWAY_TOKEN) throw new Error('RAILWAY_API_TOKEN not set');
@@ -314,7 +314,7 @@ async function railwayQuery(query, variables = {}) {
 }
 
 function requireRailway(req, res, next) {
-  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'RAILWAY_API_TOKEN not configured.' });
+  if (!RAILWAY_TOKEN) return res.status(503).json({ error: 'Neither RAILWAY_API_TOKEN nor RAILWAY_TOKEN is set.' });
   const connId = req.query.cid || req.headers['x-connection-id'];
   if (!connId || !conns.has(connId)) return res.status(401).json({ error: 'No connection.' });
   next();
