@@ -66,22 +66,12 @@ function serverLog(level, msg) {
   const entry = { t: Date.now(), level, msg };
   logBuffer.push(entry);
   if (logBuffer.length > LOG_BUFFER_SIZE) logBuffer.shift();
-  const prefix = { info: '●', warn: '⚠', error: '✖', debug: '○' }[level] || '●';
-  console.log(`[${prefix}] ${msg}`);
 }
 
 function enqueue(connId, type, data) {
   const conn = conns.get(connId);
   if (conn) conn.queue.push({ type, ...data });
 }
-
-// Intercept console to capture server logs
-const _origLog = console.log;
-const _origError = console.error;
-const _origWarn = console.warn;
-console.log = (...args) => { _origLog(...args); serverLog('info', args.join(' ')); };
-console.error = (...args) => { _origError(...args); serverLog('error', args.join(' ')); };
-console.warn = (...args) => { _origWarn(...args); serverLog('warn', args.join(' ')); };
 
 // ─── POST /api/auth — login, get connection ID ──────────────────────
 app.post('/api/auth', async (req, res) => {
@@ -115,6 +105,7 @@ app.post('/api/auth', async (req, res) => {
   }
 
   console.log(`[AUTH] ${connId} ${resumed ? 'resumed' : 'new'}`);
+  serverLog('info', `Auth: ${connId} ${resumed ? 'resumed session' : 'new session'}`);
   res.json({ connectionId: connId });
 });
 
@@ -130,7 +121,6 @@ app.get('/api/poll', (req, res) => {
 
   if (conn.queue.length > 0) {
     const messages = conn.queue.splice(0);
-    console.log(`[POLL] ${connId}: ${messages.length} messages (immediate)`);
     return res.json({ messages });
   }
 
@@ -145,7 +135,6 @@ app.get('/api/poll', (req, res) => {
       clearTimeout(timeout);
       clearInterval(check);
       const messages = conn.queue.splice(0);
-      console.log(`[POLL] ${connId}: ${messages.length} messages`);
       res.json({ messages });
     }
   }, 200);
@@ -179,6 +168,7 @@ app.post('/api/send', async (req, res) => {
         res.json({ ok: true });
         const workdir = process.env.WORKDIR || path.join(__dirname, 'data', 'workspace');
         console.log(`[CMD] ${connId}: ${command}`);
+        serverLog('info', `CMD: ${command.substring(0, 80)}`);
 
         runAgent(command, conn.session, {
           onStatus:      (msg)  => enqueue(connId, 'status', { message: msg }),
@@ -197,6 +187,7 @@ app.post('/api/send', async (req, res) => {
           }
         }).catch(err => {
           enqueue(connId, 'error', { message: `Agent crashed: ${err.message}` });
+          serverLog('error', `Agent crash: ${err.message}`);
         }).finally(() => { conn.processing = false; });
         return;
       }
@@ -260,6 +251,7 @@ app.post('/api/send', async (req, res) => {
     }
   } catch (err) {
     console.error(`[HTTP] Error:`, err.message);
+    serverLog('error', `HTTP Error: ${err.message}`);
     res.status(500).json({ error: 'Server error.' });
   }
 });
@@ -268,9 +260,9 @@ app.post('/api/send', async (req, res) => {
 setInterval(() => {
   const now = Date.now();
   conns.forEach((conn, id) => {
-    if (now - conn.lastPoll > 120000) { // 2 min no polling = stale
+    if (now - conn.lastPoll > 120000) {
       conns.delete(id);
-      console.log(`[CLEANUP] Stale connection: ${id}`);
+      serverLog('info', `Cleaned stale connection: ${id.substring(0, 8)}`);
     }
   });
 }, 60000);
@@ -321,5 +313,6 @@ sessions.init().then(async () => {
     console.log(`\n🚀 Hermes Web UI Gateway`);
     console.log(`   Port:   ${PORT}`);
     console.log(`   Mode:   HTTP Long-Poll\n`);
+    serverLog('info', `Server started on port ${PORT}`);
   });
 });
