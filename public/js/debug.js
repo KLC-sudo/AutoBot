@@ -64,6 +64,8 @@ const Debug = (() => {
       <div class="debug-tab-content hidden" id="debug-tab-railway">
         <div class="railway-controls">
           <select id="rw-project" class="railway-select"><option value="">Loading projects...</option></select>
+          <input id="rw-project-id" class="railway-select" placeholder="Or paste Project ID..." style="max-width:180px">
+          <button class="debug-btn" id="rw-lookup" title="Lookup project by ID">🔍</button>
           <select id="rw-service" class="railway-select" disabled><option value="">Select project first</option></select>
           <select id="rw-env" class="railway-select" disabled><option value="">Select service first</option></select>
           <button class="debug-btn" id="rw-fetch">Logs</button>
@@ -121,6 +123,10 @@ const Debug = (() => {
     document.getElementById('rw-service').onchange = _loadEnvironments;
     document.getElementById('rw-fetch').onclick = _fetchRailwayLogs;
     document.getElementById('rw-check').onclick = _checkToken;
+    document.getElementById('rw-lookup').onclick = _lookupProject;
+    document.getElementById('rw-project-id').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') _lookupProject();
+    });
     document.getElementById('rw-redeploy').onclick = _redeployService;
     document.getElementById('rw-add-pg').onclick = () => _createDatabase('PostgreSQL', 'postgres');
     document.getElementById('rw-add-redis').onclick = () => _createDatabase('Redis', 'redis');
@@ -276,6 +282,52 @@ const Debug = (() => {
     } catch (err) {
       status.textContent = `Error: ${err.message}`;
     }
+  }
+
+  async function _lookupProject() {
+    const projectIdInput = document.getElementById('rw-project-id');
+    const statusEl = document.getElementById('rw-status');
+    const logEl = document.getElementById('rw-log');
+    const projectId = projectIdInput.value.trim();
+    if (!projectId) { statusEl.textContent = 'Enter a project ID first'; return; }
+    statusEl.textContent = `Looking up project ${projectId.substring(0, 8)}...`;
+    logEl.innerHTML = '';
+    try {
+      const cid = WsClient.getConnectionId();
+      const res = await fetch(`/api/railway/project/${projectId}?cid=${cid}`);
+      const data = await res.json();
+      if (data.error) { statusEl.textContent = `Error: ${data.error}`; return; }
+      statusEl.textContent = `Project: ${data.name} (${data.id})`;
+      // Show services, environments, volumes
+      const services = data.services?.edges?.map(e => e.node) || [];
+      const envs = data.environments?.edges?.map(e => e.node) || [];
+      const vols = data.volumes?.edges?.map(e => e.node) || [];
+      const lines = [
+        `📦 Services: ${services.length}`,
+        ...services.map(s => `  • ${s.name} (${s.id.substring(0, 8)}...)`),
+        `🌐 Environments: ${envs.length}`,
+        ...envs.map(e => `  • ${e.name} (${e.id.substring(0, 8)}...)`),
+        `💾 Volumes: ${vols.length}`,
+        ...vols.map(v => `  • ${v.name}`),
+      ];
+      lines.forEach(line => {
+        const el = document.createElement('div');
+        el.className = 'debug-entry debug-info';
+        el.textContent = line;
+        logEl.appendChild(el);
+      });
+      // Also populate the project dropdown if not already there
+      const sel = document.getElementById('rw-project');
+      const exists = Array.from(sel.options).some(o => o.value === data.id);
+      if (!exists) {
+        const opt = document.createElement('option');
+        opt.value = data.id; opt.textContent = data.name;
+        sel.appendChild(opt);
+      }
+      sel.value = data.id;
+      _loadServices();
+      _loadEnvironments();
+    } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
   }
 
   async function _loadServices() {

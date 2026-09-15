@@ -111,6 +111,14 @@ You have full access to manage Railway infrastructure via API. Your Railway tool
 - **railway_list_volumes** — List volumes in a project
 - **railway_get_logs** — Get deployment logs
 
+### Railway Token Troubleshooting
+If railway_list_projects returns empty, the token may not have access to the workspace where your project lives. Common fixes:
+1. Set RAILWAY_PROJECT_ID env var to the project ID directly (find it in Railway dashboard URL or project settings)
+2. Create a new token at https://railway.com/account/tokens — select "No workspace" for account-level access, or select the specific workspace
+3. Use a project token from project settings for single-project access
+
+When users ask about Railway infrastructure, ask for the project ID if projects list is empty. The project ID is in the Railway dashboard URL: railway.com/project/PROJECT_ID.
+
 When users ask about Railway infrastructure (databases, volumes, deployments, variables), use these tools directly. Common patterns:
 - "Add a Postgres DB" → railway_create_service(type="postgres")
 - "Add persistent storage" → railway_create_volume()
