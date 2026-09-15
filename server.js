@@ -356,35 +356,48 @@ app.get('/api/railway/token-info', requireRailway, async (req, res) => {
 app.get('/api/railway/projects', requireRailway, async (req, res) => {
   serverLog('info', `Railway projects request from ${req.query.cid?.substring(0, 8)}`);
   try {
-    // Try top-level projects query first (works with account + workspace tokens)
-    let data;
+    // Strategy 1: query workspaces, then projects in each workspace
     try {
-      data = await railwayQuery(`{ projects { edges { node { id name } } } }`);
-      if (data.projects?.edges) {
-        serverLog('info', `Railway projects found: ${data.projects.edges.length}`);
+      const wsData = await railwayQuery(`{ workspaces(first: 20) { edges { node { id name } } } }`);
+      const workspaces = wsData.workspaces?.edges?.map(e => e.node) || [];
+      if (workspaces.length) {
+        serverLog('info', `Found ${workspaces.length} workspaces, querying projects...`);
+        const allProjects = [];
+        for (const ws of workspaces) {
+          try {
+            const pData = await railwayQuery(`query ($wsId: String!) {
+              projects(workspaceId: $wsId) { edges { node { id name } } }
+            }`, { wsId: ws.id });
+            const projs = pData.projects?.edges?.map(e => e.node) || [];
+            projs.forEach(p => allProjects.push(p));
+          } catch (e) { serverLog('warn', `projects in workspace ${ws.name} failed: ${e.message}`); }
+        }
+        if (allProjects.length) {
+          serverLog('info', `Found ${allProjects.length} total projects across workspaces`);
+          return res.json({ projects: allProjects });
+        }
+      }
+    } catch (e) { serverLog('warn', `workspaces query failed: ${e.message}`); }
+
+    // Strategy 2: top-level projects query
+    try {
+      const data = await railwayQuery(`{ projects { edges { node { id name } } } }`);
+      if (data.projects?.edges?.length) {
+        serverLog('info', `Top-level projects: ${data.projects.edges.length}`);
         return res.json({ projects: data.projects.edges.map(e => e.node) });
       }
-    } catch (e) { serverLog('warn', `projects query failed: ${e.message}`); }
+    } catch (e) { serverLog('warn', `top-level projects failed: ${e.message}`); }
 
-    // Fallback: try me.projects (account tokens only)
+    // Strategy 3: projectToken (single project only)
     try {
-      data = await railwayQuery(`{ me { projects(first: 50) { edges { node { id name } } } } }`);
-      if (data.me?.projects?.edges) {
-        serverLog('info', `Railway me.projects found: ${data.me.projects.edges.length}`);
-        return res.json({ projects: data.me.projects.edges.map(e => e.node) });
-      }
-    } catch (e) { serverLog('warn', `me.projects query failed: ${e.message}`); }
-
-    // Fallback: try projectToken (project tokens — single project only)
-    try {
-      data = await railwayQuery(`{ projectToken { projectId } }`);
+      const data = await railwayQuery(`{ projectToken { projectId } }`);
       if (data.projectToken?.projectId) {
-        serverLog('info', `Railway project token: ${data.projectToken.projectId}`);
-        return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project (project token)' }] });
+        serverLog('info', `Project token: ${data.projectToken.projectId}`);
+        return res.json({ projects: [{ id: data.projectToken.projectId, name: 'Current Project' }] });
       }
-    } catch (e) { serverLog('warn', `projectToken query failed: ${e.message}`); }
+    } catch (e) { serverLog('warn', `projectToken failed: ${e.message}`); }
 
-    res.json({ projects: [], error: 'All project queries returned empty. Check token permissions.' });
+    res.json({ projects: [], error: 'No projects found via any query method.' });
   } catch (err) {
     serverLog('error', `Railway projects error: ${err.message}`);
     res.status(500).json({ error: err.message });
