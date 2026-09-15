@@ -244,8 +244,21 @@ html, body {
    INPUT BAR
    ═══════════════════════════════════════════════════════════════════ */
 .input-bar { padding: 12px 16px; background: var(--bg-card); border-top: 1px solid var(--border); flex-shrink: 0; }
-.input-bar form { display: flex; gap: 8px; }
-.input-command { flex: 1; padding: 12px 14px; border-radius: var(--radius); }
+.input-bar form { display: flex; flex-direction: column; gap: 0; }
+
+.input-row { display: flex; gap: 8px; align-items: flex-end; }
+
+.input-command {
+  flex: 1; padding: 12px 14px; border-radius: var(--radius);
+  resize: none; overflow-y: auto; min-height: 44px; max-height: 200px;
+  line-height: 1.5; font-family: var(--font-mono); font-size: 14px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  color: var(--text-primary); outline: none; transition: border-color 0.2s;
+  -webkit-appearance: none; touch-action: manipulation;
+}
+.input-command:focus { border-color: var(--border-focus); box-shadow: 0 0 0 2px var(--accent-dim); }
+.input-command::placeholder { color: var(--text-muted); }
+.input-command:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-send {
   width: 44px; height: 44px; background: var(--accent); color: #000; border: none;
@@ -257,6 +270,39 @@ html, body {
 .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .input-bar-footer { display: flex; justify-content: space-between; margin-top: 6px; padding: 0 2px; }
+
+/* Token warning banner */
+.token-warning {
+  padding: 6px 12px; margin-bottom: 8px; border-radius: var(--radius-sm);
+  font-size: 11px; font-family: var(--font-sans); display: flex; align-items: center; gap: 6px;
+  animation: fadeIn 0.15s ease-out;
+}
+.token-warning.warn { background: rgba(234, 179, 8, 0.1); border: 1px solid rgba(234, 179, 8, 0.3); color: #eab308; }
+.token-warning.danger { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--error); }
+
+/* Token estimate in footer */
+#token-estimate { font-variant-numeric: tabular-nums; }
+
+/* Revert button on user messages */
+.msg-user { position: relative; }
+.msg-revert-btn {
+  position: absolute; top: 4px; right: 4px;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer; font-size: 10px;
+  padding: 2px 6px; border-radius: 3px; opacity: 0; transition: opacity 0.15s;
+  font-family: var(--font-sans);
+}
+.msg-user:hover .msg-revert-btn { opacity: 1; }
+.msg-revert-btn:hover { color: var(--error); border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.1); }
+
+/* Cancel button */
+.btn-cancel {
+  width: 44px; height: 44px; background: var(--error); color: #fff; border: none;
+  border-radius: var(--radius); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; transition: background 0.2s; flex-shrink: 0;
+  touch-action: manipulation; animation: pulse 1.5s ease-in-out infinite;
+}
+.btn-cancel:hover { background: #dc2626; }
 
 /* ═══════════════════════════════════════════════════════════════════
    CODE VIEWER
@@ -528,8 +574,8 @@ html, body {
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
-  .input-bar form { gap: 8px; }
-  .input-command { padding: 10px 12px; font-size: 14px; border-radius: var(--radius); }
+  .input-bar form { gap: 0; }
+  .input-command { padding: 10px 12px; font-size: 14px; border-radius: var(--radius); min-height: 44px; }
   .btn-send { width: 44px; height: 44px; flex-shrink: 0; }
   .input-bar-footer { font-size: 10px; margin-top: 4px; }
 
@@ -546,6 +592,7 @@ html, body {
   .btn-send { width: 40px; height: 40px; }
   .sidebar { width: 85vw; min-width: 85vw; }
   .sidebar.collapsed { width: 85vw; min-width: 85vw; transform: translateX(-100%); }
+  .token-warning { font-size: 10px; padding: 4px 8px; }
 }
 
 /* Safe area for notch phones */

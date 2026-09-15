@@ -1,21 +1,39 @@
 /* ═══════════════════════════════════════════════════════════════════════
    app.js — Main application controller
-   Session management, model switching, token tracking, command history.
+   Session management, model switching, token tracking, command history,
+   expandable textarea, token warnings, revert/cancel.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ─── State ─────────────────────────────────────────────────────── */
 let currentSessionId = null;
 let availableModels = [];
 let mobileCodePanelVisible = false;
+let _isProcessing = false;
+let _lastSentText = null;
+let _pendingCommandId = 0;
+
+/* ─── Helpers ────────────────────────────────────────────────────── */
+function _esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+function isMobile() { return window.innerWidth <= 768; }
 
 /* ─── Mobile Viewport Fix ──────────────────────────────────────── */
-// Android Go Edition (and older Android Chrome) doesn't support 100dvh.
-// window.innerHeight gives the real viewport height excluding browser chrome.
 function fixMobileViewport() {
   if (!('ontouchstart' in window) && window.innerWidth > 768) return;
   const vh = window.innerHeight * 0.01;
   document.documentElement.style.setProperty('--vh', `${vh}px`);
   document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+}
+
+/* ─── Toast ──────────────────────────────────────────────────────── */
+function showToast(message, type = '') {
+  const existing = document.querySelector('.status-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = `status-toast ${type ? 'toast-' + type : ''}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2200);
 }
 
 /* ─── Command History ───────────────────────────────────────────── */
@@ -48,7 +66,6 @@ const CodeViewer = (() => {
     _highlight(codeEl);
     switchCodeView('code');
 
-    // On mobile, auto-show the code panel when new code arrives
     if (isMobile() && !mobileCodePanelVisible) {
       showMobileCodePanel();
     }
@@ -96,18 +113,6 @@ const CodeViewer = (() => {
     document.getElementById('code-filename').textContent = `Diff: ${filename}`;
   }
 
-function _esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-
-function showToast(message, type = '') {
-  const existing = document.querySelector('.status-toast');
-  if (existing) existing.remove();
-  const toast = document.createElement('div');
-  toast.className = `status-toast ${type ? 'toast-' + type : ''}`;
-  toast.textContent = message;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 2200);
-}
-
   return { showFile, showDiff };
 })();
 
@@ -120,24 +125,102 @@ function switchCodeView(view) {
 /* ─── Mobile Code Panel Toggle ──────────────────────────────────── */
 function showMobileCodePanel() {
   if (!isMobile()) return;
-  const panel = document.getElementById('panel-code');
-  panel.classList.remove('mobile-hidden');
+  document.getElementById('panel-code').classList.remove('mobile-hidden');
   mobileCodePanelVisible = true;
 }
 
 function hideMobileCodePanel() {
   if (!isMobile()) return;
-  const panel = document.getElementById('panel-code');
-  panel.classList.add('mobile-hidden');
+  document.getElementById('panel-code').classList.add('mobile-hidden');
   mobileCodePanelVisible = false;
 }
 
 function toggleMobileCodePanel() {
-  if (mobileCodePanelVisible) {
-    hideMobileCodePanel();
+  if (mobileCodePanelVisible) hideMobileCodePanel();
+  else showMobileCodePanel();
+}
+
+/* ─── Token Estimation & Warning ─────────────────────────────────── */
+const TOKEN_WARN_THRESHOLD = 2000;
+const TOKEN_DANGER_THRESHOLD = 4000;
+
+function estimateInputTokens(text) {
+  return Math.ceil((text || '').length / 4);
+}
+
+function updateTokenEstimate() {
+  const input = document.getElementById('cmd-input');
+  const estimateEl = document.getElementById('token-estimate');
+  const warningEl = document.getElementById('token-warning');
+  const warningText = document.getElementById('token-warning-text');
+  const text = input.value;
+  const tokens = estimateInputTokens(text);
+
+  if (tokens > 0) {
+    estimateEl.textContent = `~${tokens.toLocaleString()} tok`;
   } else {
-    showMobileCodePanel();
+    estimateEl.textContent = '';
   }
+
+  if (tokens >= TOKEN_DANGER_THRESHOLD) {
+    warningEl.className = 'token-warning danger';
+    warningText.textContent = `⚠ ~${tokens.toLocaleString()} tokens — this is a very long prompt. Consider breaking it into smaller steps to save tokens.`;
+    warningEl.classList.remove('hidden');
+  } else if (tokens >= TOKEN_WARN_THRESHOLD) {
+    warningEl.className = 'token-warning warn';
+    warningText.textContent = `~${tokens.toLocaleString()} tokens — this is a fairly long prompt.`;
+    warningEl.classList.remove('hidden');
+  } else {
+    warningEl.classList.add('hidden');
+  }
+}
+
+/* ─── Auto-growing Textarea ──────────────────────────────────────── */
+function autoResizeTextarea() {
+  const input = document.getElementById('cmd-input');
+  input.style.height = 'auto';
+  const newHeight = Math.min(input.scrollHeight, 200);
+  input.style.height = newHeight + 'px';
+}
+
+/* ─── Processing State ───────────────────────────────────────────── */
+function setProcessing(processing) {
+  _isProcessing = processing;
+  const sendBtn = document.getElementById('send-btn');
+  const input = document.getElementById('cmd-input');
+  const form = document.getElementById('cmd-form');
+
+  if (processing) {
+    // Replace send button with cancel button
+    sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    sendBtn.className = 'btn-cancel';
+    sendBtn.disabled = false;
+    sendBtn.title = 'Cancel';
+    sendBtn.onclick = cancelCommand;
+  } else {
+    sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
+    sendBtn.className = 'btn-send';
+    sendBtn.disabled = !input.value.trim() || !WsClient.isConnected();
+    sendBtn.title = 'Send (Enter)';
+    sendBtn.onclick = null;
+  }
+}
+
+function cancelCommand() {
+  WsClient.send('cancel', {});
+  setProcessing(false);
+  _lastSentText = null;
+  Terminal.addSystem('Command cancelled.');
+}
+
+/* ─── Revert Last Command ────────────────────────────────────────── */
+function revertLastCommand() {
+  if (!_lastSentText) return;
+  const revertText = `Please revert/undo the changes from my last command: "${_lastSentText}"`;
+  Terminal.addUser(revertText);
+  WsClient.sendCommand(revertText);
+  _lastSentText = null;
+  showToast('Reverting...', 'rename');
 }
 
 /* ─── Command Dispatch ──────────────────────────────────────────── */
@@ -150,10 +233,28 @@ function dispatchCommand(event) {
     Terminal.addError('Not connected.');
     return false;
   }
+
+  // Warn on very long input but still send
+  const tokens = estimateInputTokens(text);
+  if (tokens >= TOKEN_DANGER_THRESHOLD) {
+    if (!confirm(`This prompt is ~${tokens} tokens. This will use significant API credits. Send anyway?`)) {
+      return false;
+    }
+  }
+
+  _pendingCommandId++;
+  _lastSentText = text;
   CommandHistory.push(text);
-  Terminal.addUser(text);
+  Terminal.addUser(text, false, _pendingCommandId);
   WsClient.sendCommand(text);
+  setProcessing(true);
+
+  // Auto-hide warning
+  document.getElementById('token-warning').classList.add('hidden');
+  document.getElementById('token-estimate').textContent = '';
+
   input.value = '';
+  autoResizeTextarea();
   input.focus();
   return false;
 }
@@ -189,7 +290,6 @@ function renderSessionList(sessions) {
       </div>
     `;
 
-    // Click to load session
     el.addEventListener('click', (e) => {
       if (e.target.closest('.session-item-edit') || e.target.closest('.session-item-delete')) return;
       WsClient.send('session_load', { id: s.id });
@@ -199,13 +299,11 @@ function renderSessionList(sessions) {
       if (isMobile()) setTimeout(() => closeSidebar(), 150);
     });
 
-    // Edit button → rename
     el.querySelector('.session-item-edit').addEventListener('click', (e) => {
       e.stopPropagation();
       startRename(el, s);
     });
 
-    // Delete button
     el.querySelector('.session-item-delete').addEventListener('click', (e) => {
       e.stopPropagation();
       if (!confirm(`Delete "${s.name || 'Untitled'}"?`)) return;
@@ -255,8 +353,6 @@ function startRename(el, s) {
   });
 }
 
-function _esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-
 /* ─── Token Usage Display ───────────────────────────────────────── */
 function updateTokenDisplay(data) {
   const fill = document.getElementById('token-fill');
@@ -278,18 +374,14 @@ function updateTokenDisplay(data) {
 function updateSessionDisplay(data) {
   const prevSessionId = currentSessionId;
   currentSessionId = data.sessionId;
-
-  // Persist session ID for resume after reconnect/restart
   Auth.setSessionId(data.sessionId);
 
-  // Clear terminal when switching to a different session
   if (prevSessionId && prevSessionId !== data.sessionId) {
     Terminal.clear();
   }
 
   document.getElementById('session-title').textContent = data.name || data.model || 'Session';
 
-  // Update token display from session stats
   if (data.contextLength) {
     const fill = document.getElementById('token-fill');
     const label = document.getElementById('token-label');
@@ -301,11 +393,9 @@ function updateSessionDisplay(data) {
     label.textContent = `${data.totalTokensUsed?.toLocaleString() || 0} total`;
   }
 
-  // Update model selector
   const sel = document.getElementById('model-select');
   if (data.model) sel.value = data.model;
 
-  // Refresh session list
   WsClient.send('session_list', {});
 }
 
@@ -324,55 +414,57 @@ function populateModels(models) {
 
 /* ─── Sidebar Toggle ────────────────────────────────────────────── */
 function openSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const backdrop = document.getElementById('sidebar-backdrop');
-  const hamburger = document.getElementById('show-sidebar-btn');
-  sidebar.classList.remove('collapsed');
-  backdrop.classList.add('visible');
-  hamburger.style.display = 'none';
+  document.getElementById('sidebar').classList.remove('collapsed');
+  document.getElementById('sidebar-backdrop').classList.add('visible');
+  document.getElementById('show-sidebar-btn').style.display = 'none';
 }
 
 function closeSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const backdrop = document.getElementById('sidebar-backdrop');
-  const hamburger = document.getElementById('show-sidebar-btn');
-  sidebar.classList.add('collapsed');
-  backdrop.classList.remove('visible');
-  hamburger.style.display = 'flex';
+  document.getElementById('sidebar').classList.add('collapsed');
+  document.getElementById('sidebar-backdrop').classList.remove('visible');
+  document.getElementById('show-sidebar-btn').style.display = 'flex';
 }
 
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
-  if (sidebar.classList.contains('collapsed')) {
-    openSidebar();
-  } else {
-    closeSidebar();
-  }
-}
-
-function isMobile() {
-  return window.innerWidth <= 768;
+  if (sidebar.classList.contains('collapsed')) openSidebar();
+  else closeSidebar();
 }
 
 /* ─── Keyboard Shortcuts ────────────────────────────────────────── */
 document.addEventListener('keydown', (e) => {
   const input = document.getElementById('cmd-input');
   if (document.activeElement === input) {
-    if (e.key === 'ArrowUp') { e.preventDefault(); input.value = CommandHistory.up(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); input.value = CommandHistory.down(); }
-    else if (e.key === 'Escape') { input.value = ''; CommandHistory.reset(); }
+    if (e.key === 'ArrowUp' && !e.shiftKey && input.selectionStart === 0) {
+      e.preventDefault();
+      input.value = CommandHistory.up();
+      autoResizeTextarea();
+    }
+    else if (e.key === 'ArrowDown' && !e.shiftKey && input.selectionStart === input.value.length) {
+      e.preventDefault();
+      input.value = CommandHistory.down();
+      autoResizeTextarea();
+    }
+    else if (e.key === 'Escape') {
+      input.value = '';
+      CommandHistory.reset();
+      autoResizeTextarea();
+      document.getElementById('token-warning').classList.add('hidden');
+      document.getElementById('token-estimate').textContent = '';
+    }
+    else if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      dispatchCommand(e);
+    }
   }
   if (e.key === 'l' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); clearTerminal(); }
 });
 
 /* ─── Init ──────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-  // Fix mobile viewport height (critical for Android Go Edition)
   fixMobileViewport();
   window.addEventListener('resize', fixMobileViewport);
-  window.addEventListener('orientationchange', () => {
-    setTimeout(fixMobileViewport, 100);
-  });
+  window.addEventListener('orientationchange', () => setTimeout(fixMobileViewport, 100));
 
   // Wire up UI elements
   document.getElementById('login-form').addEventListener('submit', handleLogin);
@@ -382,14 +474,20 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => switchCodeView(btn.dataset.view));
   });
 
+  // Textarea auto-resize and token estimation
+  const cmdInput = document.getElementById('cmd-input');
+  cmdInput.addEventListener('input', () => {
+    autoResizeTextarea();
+    updateTokenEstimate();
+  });
+
   // Sidebar
   document.getElementById('show-sidebar-btn').addEventListener('click', openSidebar);
   document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
   document.getElementById('new-session-btn').addEventListener('click', () => {
     const model = document.getElementById('model-select').value || 'openai/gpt-4o';
-    const name = prompt('Session name (optional):') || undefined;
-    WsClient.send('session_create', { model, name });
+    WsClient.send('session_create', { model, name: null });
     if (isMobile()) closeSidebar();
   });
 
@@ -399,9 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Model selector
   document.getElementById('model-select').addEventListener('change', (e) => {
-    if (e.target.value) {
-      WsClient.send('model_switch', { model: e.target.value });
-    }
+    if (e.target.value) WsClient.send('model_switch', { model: e.target.value });
   });
 
   // WebSocket event handlers
@@ -409,9 +505,10 @@ document.addEventListener('DOMContentLoaded', () => {
   WsClient.on('sessionUpdate', updateSessionDisplay);
   WsClient.on('sessionList', (pkt) => renderSessionList(pkt.sessions || []));
   WsClient.on('modelsList', (pkt) => populateModels(pkt.models || []));
-  WsClient.on('disconnected', () => { currentSessionId = null; });
+  WsClient.on('disconnected', () => { currentSessionId = null; setProcessing(false); });
+  WsClient.on('agentDone', () => { setProcessing(false); _lastSentText = null; });
 
-  // Debug panel — click debug button or triple-tap status indicator
+  // Debug panel
   document.getElementById('debug-btn').addEventListener('click', () => {
     if (typeof Debug !== 'undefined') Debug.toggle();
   });
@@ -426,12 +523,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (_tapCount >= 3) { _tapCount = 0; if (typeof Debug !== 'undefined') Debug.toggle(); }
     });
   }
+
   const sidebar = document.getElementById('sidebar');
   const hamburger = document.getElementById('show-sidebar-btn');
   if (isMobile()) {
     sidebar.classList.add('collapsed');
     hamburger.style.display = 'flex';
-    // Hide code panel by default on mobile
     document.getElementById('panel-code').classList.add('mobile-hidden');
   } else {
     sidebar.classList.remove('collapsed');

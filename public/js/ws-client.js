@@ -148,6 +148,7 @@ const WsClient = (() => {
 
       case 'text':
         Terminal.addAgent(packet.message);
+        _emit('agentDone', packet);
         break;
 
       case 'code':

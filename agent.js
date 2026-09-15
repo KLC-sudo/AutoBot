@@ -11,7 +11,7 @@
 
 const fsp = require('fs/promises');
 const path = require('path');
-const { execSync, exec: execAsync } = require('child_process');
+const { exec: execAsync } = require('child_process');
 const { getContextLength, estimateTokens } = require('./sessions');
 
 // ─── Find available shell ──────────────────────────────────────────
@@ -20,6 +20,7 @@ function findShell() {
   const shells = ['/bin/bash', '/bin/sh', '/usr/bin/bash', '/usr/bin/sh', 'bash', 'sh'];
   for (const shell of shells) {
     try {
+      const { execSync } = require('child_process');
       execSync(`"${shell}" -c "echo ok"`, { encoding: 'utf8', timeout: 5000 });
       return shell;
     } catch { continue; }
@@ -239,10 +240,12 @@ const TOOLS = [
 ];
 
 // ─── Tool Execution ───────────────────────────────────────────────
-async function executeTool(name, args, workdir) {
+async function executeTool(name, args, workdir, signal) {
   const fullPath = path.isAbsolute(args.path || '')
     ? (args.path || '')
     : path.join(workdir, args.path || '');
+
+  if (signal?.aborted) throw new Error('Cancelled');
 
   switch (name) {
     case 'read_file': {
@@ -309,15 +312,29 @@ async function executeTool(name, args, workdir) {
         const shell = getShell();
         console.log(`[Agent] Running command with shell: ${shell}`);
 
-        const output = execSync(args.command, {
-          cwd: cmdCwd,
-          encoding: 'utf8',
-          timeout: 60000,
-          maxBuffer: 2 * 1024 * 1024,
-          shell,
-          env: { ...process.env, PATH: process.env.PATH },
+        const output = await new Promise((resolve, reject) => {
+          const proc = execAsync(args.command, {
+            cwd: cmdCwd,
+            encoding: 'utf8',
+            timeout: 60000,
+            maxBuffer: 2 * 1024 * 1024,
+            shell,
+            env: { ...process.env, PATH: process.env.PATH },
+          }, (err, stdout, stderr) => {
+            if (err) {
+              resolve({ success: false, content: stdout || '', error: stderr || err.message });
+            } else {
+              resolve({ success: true, content: (stdout || '').trim() || '(no output)' });
+            }
+          });
+
+          if (signal) {
+            signal.addEventListener('abort', () => {
+              try { proc.kill('SIGTERM'); } catch {}
+            });
+          }
         });
-        return { success: true, content: output.trim() || '(no output)' };
+        return output;
       } catch (err) {
         return {
           success: false,
@@ -346,7 +363,6 @@ async function executeTool(name, args, workdir) {
         const targetDir = args.target_dir || path.basename(args.url.replace(/\.git$/, ''), '.git');
         const clonePath = path.join(workdir, targetDir);
 
-        // Inject GitHub token for private repos
         let cloneUrl = args.url;
         const githubToken = process.env.GITHUB_TOKEN;
         if (githubToken && cloneUrl.includes('github.com')) {
@@ -354,10 +370,20 @@ async function executeTool(name, args, workdir) {
         }
 
         const shell = getShell();
-        execSync(`git clone ${cloneUrl} "${clonePath}"`, {
-          encoding: 'utf8',
-          timeout: 120000,
-          shell,
+        await new Promise((resolve, reject) => {
+          const proc = execAsync(`git clone ${cloneUrl} "${clonePath}"`, {
+            encoding: 'utf8',
+            timeout: 120000,
+            shell,
+          }, (err, stdout, stderr) => {
+            if (err) reject(err);
+            else resolve();
+          });
+          if (signal) {
+            signal.addEventListener('abort', () => {
+              try { proc.kill('SIGTERM'); } catch {}
+            });
+          }
         });
         return { success: true, content: `Cloned to ${targetDir}/` };
       } catch (err) {
@@ -372,40 +398,52 @@ async function executeTool(name, args, workdir) {
         const message = args.message || 'Update via Hermes Agent';
         const shell = getShell();
 
-        // Configure git
         const githubUser = process.env.GITHUB_USER || 'Hermes Agent';
 
-        execSync(`git config user.name "${githubUser}"`, { cwd: repoPath, encoding: 'utf8', shell });
-        execSync(`git config user.email "hermes@agent.local"`, { cwd: repoPath, encoding: 'utf8', shell });
+        const run = (cmd) => new Promise((resolve, reject) => {
+          execAsync(cmd, { cwd: repoPath, encoding: 'utf8', shell }, (err, stdout, stderr) => {
+            if (err) reject(err);
+            else resolve(stdout);
+          });
+        });
 
-        // Stage all changes
-        execSync(`git add -A`, { cwd: repoPath, encoding: 'utf8', shell });
+        await run(`git config user.name "${githubUser}"`);
+        await run(`git config user.email "hermes@agent.local"`);
+        await run('git add -A');
 
-        // Check if there are changes to commit
         try {
-          execSync(`git diff --cached --quiet`, { cwd: repoPath, encoding: 'utf8', shell });
+          await run('git diff --cached --quiet');
           return { success: true, content: 'No changes to commit' };
         } catch {
-          // There are changes (exit code 1 means changes exist)
+          // There are changes
         }
 
-        // Commit
-        execSync(`git commit -m "${message}"`, { cwd: repoPath, encoding: 'utf8', shell });
+        await run(`git commit -m "${message}"`);
 
-        // Inject token into remote URL for push
         const githubToken = process.env.GITHUB_TOKEN;
         if (githubToken) {
           try {
-            const remoteUrl = execSync(`git remote get-url origin`, { cwd: repoPath, encoding: 'utf8', shell }).trim();
+            const remoteUrl = (await run('git remote get-url origin')).trim();
             if (remoteUrl.includes('github.com') && !remoteUrl.includes('@')) {
               const authUrl = remoteUrl.replace('https://github.com/', `https://${githubToken}@github.com/`);
-              execSync(`git remote set-url origin ${authUrl}`, { cwd: repoPath, encoding: 'utf8', shell });
+              await run(`git remote set-url origin ${authUrl}`);
             }
           } catch { /* ignore */ }
         }
 
-        // Push
-        execSync(`git push origin ${branch}`, { cwd: repoPath, encoding: 'utf8', shell, timeout: 60000 });
+        await new Promise((resolve, reject) => {
+          const proc = execAsync(`git push origin ${branch}`, {
+            cwd: repoPath, encoding: 'utf8', shell, timeout: 60000
+          }, (err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+          if (signal) {
+            signal.addEventListener('abort', () => {
+              try { proc.kill('SIGTERM'); } catch {}
+            });
+          }
+        });
 
         return { success: true, content: `Pushed to origin/${branch}` };
       } catch (err) {
@@ -419,14 +457,19 @@ async function executeTool(name, args, workdir) {
         const mgr = args.manager || 'npm';
         const cmd = mgr === 'pip' ? 'pip install -r requirements.txt' : `${mgr} install`;
         const shell = getShell();
-        const output = execSync(cmd, {
-          cwd: depPath,
-          encoding: 'utf8',
-          timeout: 120000,
-          maxBuffer: 2 * 1024 * 1024,
-          shell,
+        const output = await new Promise((resolve, reject) => {
+          execAsync(cmd, {
+            cwd: depPath,
+            encoding: 'utf8',
+            timeout: 120000,
+            maxBuffer: 2 * 1024 * 1024,
+            shell,
+          }, (err, stdout, stderr) => {
+            if (err) resolve({ success: false, error: err.message });
+            else resolve({ success: true, content: (stdout || '').trim() || 'Dependencies installed' });
+          });
         });
-        return { success: true, content: output.trim() || 'Dependencies installed' };
+        return output;
       } catch (err) {
         return { success: false, error: err.message };
       }
@@ -441,7 +484,7 @@ async function executeTool(name, args, workdir) {
 // Accepts existing session messages, appends user message, runs agent loop,
 // returns { messages, tokenUsage } for the session to persist.
 async function runAgent(userMessage, session, callbacks, workdir) {
-  const { onStatus, onCode, onText, onError, onTokenUpdate } = callbacks;
+  const { onStatus, onCode, onText, onError, onTokenUpdate, signal } = callbacks;
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = session.model || process.env.OPENROUTER_MODEL || 'openai/gpt-4o';
 
@@ -486,10 +529,16 @@ async function runAgent(userMessage, session, callbacks, workdir) {
   messages.push({ role: 'user', content: userMessage });
 
   while (iteration < MAX_ITERATIONS) {
+    if (signal?.aborted) {
+      onStatus('Cancelled by user.');
+      return null;
+    }
     iteration++;
 
     try {
       onStatus(`Thinking... (step ${iteration})`);
+
+      if (signal?.aborted) { onStatus('Cancelled by user.'); return null; }
 
       // Retry logic for network errors
       let response = null;
@@ -578,7 +627,7 @@ async function runAgent(userMessage, session, callbacks, workdir) {
 
         onStatus(`Tool: ${fnName}(${JSON.stringify(fnArgs).substring(0, 100)}...)`);
 
-        const result = await executeTool(fnName, fnArgs, workdir);
+        const result = await executeTool(fnName, fnArgs, workdir, signal);
 
         // Send code updates for file writes
         if (fnName === 'write_file' && result.success) {

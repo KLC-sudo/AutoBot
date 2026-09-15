@@ -61,6 +61,7 @@ const conns = new Map();
 const LOG_BUFFER_SIZE = 200;
 const logBuffer = [];
 const startTime = Date.now();
+const CMD_RATE_LIMIT = { windowMs: 60000, max: 20 }; // 20 commands per minute per connection
 
 function serverLog(level, msg) {
   const entry = { t: Date.now(), level, msg };
@@ -157,6 +158,16 @@ app.post('/api/send', async (req, res) => {
     return res.status(429).json({ error: 'Agent is busy.' });
   }
 
+  // Allow cancel even when processing
+  if (type === 'cancel') {
+    if (conn.processing && conn._abortController) {
+      conn._abortController.abort();
+      conn.processing = false;
+      enqueue(connId, 'status', { message: 'Command cancelled.' });
+    }
+    return res.json({ ok: true });
+  }
+
   try {
     switch (type) {
       case 'command': {
@@ -164,7 +175,18 @@ app.post('/api/send', async (req, res) => {
         if (!command) { enqueue(connId, 'error', { message: 'Empty command.' }); return res.json({ ok: true }); }
         if (command.length > 10000) { enqueue(connId, 'error', { message: 'Command too long.' }); return res.json({ ok: true }); }
 
+        // Per-connection rate limiting
+        const now = Date.now();
+        if (!conn._cmdTimestamps) conn._cmdTimestamps = [];
+        conn._cmdTimestamps = conn._cmdTimestamps.filter(t => now - t < CMD_RATE_LIMIT.windowMs);
+        if (conn._cmdTimestamps.length >= CMD_RATE_LIMIT.max) {
+          enqueue(connId, 'error', { message: `Rate limit: max ${CMD_RATE_LIMIT.max} commands per minute.` });
+          return res.json({ ok: true });
+        }
+        conn._cmdTimestamps.push(now);
+
         conn.processing = true;
+        conn._abortController = new AbortController();
         res.json({ ok: true });
         const workdir = process.env.WORKDIR || path.join(__dirname, 'data', 'workspace');
         console.log(`[CMD] ${connId}: ${command}`);
@@ -176,6 +198,7 @@ app.post('/api/send', async (req, res) => {
           onText:        (msg)  => enqueue(connId, 'text', { message: msg }),
           onError:       (msg)  => enqueue(connId, 'error', { message: msg }),
           onTokenUpdate: (d)    => enqueue(connId, 'tokens', d),
+          signal:        conn._abortController.signal,
         }, workdir).then(async (result) => {
           if (result) {
             conn.session.messages.push(...result.messages);

@@ -79,15 +79,20 @@
       <div id="terminal-stream" class="terminal-stream"></div>
 
       <footer class="input-bar">
+        <div id="token-warning" class="token-warning hidden">
+          <span id="token-warning-text"></span>
+        </div>
         <form id="cmd-form">
-          <input type="text" id="cmd-input" class="input-field input-command" placeholder="Instruct the agent..." autocomplete="off" spellcheck="false" disabled>
-          <button type="submit" id="send-btn" class="btn-send" disabled title="Send (Enter)">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-          </button>
+          <div class="input-row">
+            <textarea id="cmd-input" class="input-field input-command" placeholder="Instruct the agent..." autocomplete="off" spellcheck="false" disabled rows="1"></textarea>
+            <button type="submit" id="send-btn" class="btn-send" disabled title="Send (Enter)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+          </div>
         </form>
         <div class="input-bar-footer">
-          <span class="text-muted text-xs">↑↓ History · Enter to send</span>
-          <span id="cmd-counter" class="text-muted text-xs"></span>
+          <span class="text-muted text-xs">↑↓ History · Enter to send · Shift+Enter for newline</span>
+          <span id="token-estimate" class="text-muted text-xs"></span>
         </div>
       </footer>
     </section>
@@ -114,11 +119,10 @@
     </section>
   </main>
 
-  <script src="/js/auth.js?v=19"></script>
-  <script src="/js/ws-client.js?v=19"></script>
-  <script src="/js/terminal.js?v=19"></script>
-  <script src="/js/app.js?v=19"></script>
+  <script src="/js/auth.js?v=20"></script>
+  <script src="/js/ws-client.js?v=20"></script>
+  <script src="/js/terminal.js?v=20"></script>
+  <script src="/js/app.js?v=20"></script>
   <script src="/js/debug.js?v=20"></script>
-  <script src="/js/sw-register.js?v=19"></script>
 </body>
 </html>
